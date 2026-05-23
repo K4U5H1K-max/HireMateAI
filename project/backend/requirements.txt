@@ -8,3 +8,4 @@ pydub>=0.25.1
 SpeechRecognition>=3.10.4
 pyttsx3>=2.90
 pydantic>=2.0.0
+firebase-admin>=6.0.0

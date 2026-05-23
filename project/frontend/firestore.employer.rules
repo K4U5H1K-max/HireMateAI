@@ -1,0 +1,35 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function ownsJob(jobId) {
+      return signedIn() &&
+        get(/databases/$(database)/documents/jobs/$(jobId)).data.employerId == request.auth.uid;
+    }
+
+    match /employerProfiles/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    match /jobs/{jobId} {
+      allow create: if signedIn() && request.resource.data.employerId == request.auth.uid;
+      allow read: if signedIn() && resource.data.employerId == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.employerId == request.auth.uid
+        && request.resource.data.employerId == resource.data.employerId;
+      allow delete: if signedIn() && resource.data.employerId == request.auth.uid;
+    }
+
+    match /applications/{applicationId} {
+      allow create: if signedIn() && request.resource.data.employerId == request.auth.uid;
+      allow read, update, delete: if signedIn() && ownsJob(resource.data.jobId);
+    }
+  }
+}

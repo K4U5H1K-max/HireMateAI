@@ -30,6 +30,7 @@ secrets/
 *credentials*.json
 credentials.json
 service-account*.json
+hiremate-*.json
 *.pem
 *.key
 *.p12

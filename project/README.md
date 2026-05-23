@@ -10,6 +10,8 @@ An AI-powered interview platform that analyzes resumes, generates personalized i
 - **Text-to-Speech**: AI reads questions aloud
 - **Performance Evaluation**: Get detailed scores on technical skills, communication, and role fit
 - **PDF Export**: Download complete interview results as PDF
+- **Employer Workflow**: Employer profile setup, job listing, and per-job applicant analytics dashboard
+- **User-wise Memory**: Candidate interview history and employer data are persisted per authenticated user
 
 ## Project Structure
 
@@ -69,7 +71,17 @@ cd frontend
 npm install
 ```
 
-2. Start development server:
+2. Create `frontend/.env` from `frontend/.env.example` and fill in the Firebase settings for both login pages.
+
+The candidate and employer login pages each use their own Firebase project config:
+- `VITE_CANDIDATE_FIREBASE_*`
+- `VITE_EMPLOYER_FIREBASE_*`
+
+4. Configure Firestore for both Firebase projects:
+- Candidate project: deploy rules from `frontend/firestore.candidate.rules`
+- Employer project: deploy rules from `frontend/firestore.employer.rules`
+
+3. Start development server:
 ```bash
 cd frontend
 npm run dev
@@ -140,6 +152,33 @@ npm run dev
    - View performance scores and feedback
    - Review complete interview transcript
    - Download PDF report
+
+### Employer Flow
+
+1. **Employer Login/Signup**
+2. **Employer Profile**: Must complete company + contact details
+3. **Job Listing**: Create jobs with role details, work mode, requirements, and human-round score threshold
+4. **Job Analytics**: View applicants count, average scores, and qualified-for-human-interview count per job
+
+## Secure Data Storage (Deployment-safe)
+
+This project now uses managed Firebase Firestore collections instead of in-memory storage for employer and candidate history data:
+
+- Candidate memory (candidate Firebase project):
+   - `candidateUsers/{uid}/interviews/{docId}`
+   - Stores interview transcripts, scores, and feedback per candidate user
+
+- Employer data (employer Firebase project):
+   - `employerProfiles/{uid}`
+   - `jobs/{jobId}`
+   - `applications/{applicationId}`
+
+Security model:
+- Candidate users can only read/write their own `candidateUsers/{uid}` subtree
+- Employer users can only read/write their own profile and jobs
+- Applications are restricted through job ownership checks
+
+Important: deploy both Firestore rule files before production rollout.
 
 ## Technology Stack
 

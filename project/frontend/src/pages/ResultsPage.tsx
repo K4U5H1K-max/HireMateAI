@@ -11,6 +11,7 @@ import ResultsHeroReveal from '../components/results/ResultsHeroReveal';
 import ScoreRadarChart from '../components/results/ScoreRadarChart';
 import AnimatedScoreCard from '../components/results/AnimatedScoreCard';
 import FeedbackReveal from '../components/results/FeedbackReveal';
+import { saveCandidateInterviewMemory, applyToJob } from '../utils/candidateMemory';
 
 interface LocationState {
   qaList: QAPair[];
@@ -27,6 +28,8 @@ const ResultsPage = () => {
   const [evaluation, setEvaluation] = useState<InterviewEvaluationResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [memorySaved, setMemorySaved] = useState(false);
+  const [applying, setApplying] = useState(false);
 
   useEffect(() => {
     if (!state) {
@@ -36,6 +39,30 @@ const ResultsPage = () => {
     evaluateInterview();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!evaluation || !state || memorySaved) {
+      return;
+    }
+
+    const persistMemory = async () => {
+      try {
+        await saveCandidateInterviewMemory({
+          role: state.role,
+          resumeSummary: state.resumeSummary,
+          qaList: state.qaList,
+          evaluation,
+          isVideoInterview: Boolean(state.isVideoInterview),
+        });
+      } catch {
+        // No-op: results UI should stay available even if persistence fails.
+      } finally {
+        setMemorySaved(true);
+      }
+    };
+
+    void persistMemory();
+  }, [evaluation, memorySaved, state]);
 
   const evaluateInterview = async () => {
     try {
@@ -214,6 +241,33 @@ const ResultsPage = () => {
         <Button fullWidth size="lg" onClick={handleDownloadPDF}>
           <Download className="w-5 h-5" />
           Download Result (PDF)
+        </Button>
+        <Button
+          fullWidth
+          size="lg"
+          disabled={applying}
+          onClick={async () => {
+            const jobId = window.prompt('Enter the Job ID you want to apply to');
+            if (!jobId) return;
+            setApplying(true);
+            try {
+              await applyToJob({
+                jobId,
+                role: state.role,
+                resumeSummary: state.resumeSummary,
+                qaList: state.qaList,
+                evaluation: evaluation,
+              });
+              window.alert('Application submitted');
+            } catch (err) {
+              window.alert(err instanceof Error ? err.message : 'Failed to submit application');
+            } finally {
+              setApplying(false);
+            }
+          }}
+        >
+          <TrendingUp className="w-5 h-5" />
+          Apply to Job
         </Button>
       </div>
     </PageContainer>

@@ -19,6 +19,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
+# Firebase admin (optional) for server-side writes to employer Firestore
+try:
+    import firebase_admin
+    from firebase_admin import credentials as fb_credentials
+    from firebase_admin import firestore as admin_firestore
+    from firebase_admin import auth as fb_auth
+except Exception:
+    firebase_admin = None
+    fb_credentials = None
+    admin_firestore = None
+    fb_auth = None
+
 import pyttsx3
 import speech_recognition as sr
 
@@ -125,6 +137,39 @@ app.add_middleware(
 
 QUESTIONS_STORE: Dict[str, Dict] = {}
 QUESTIONS_TTL_SECONDS = 3600
+
+# Initialize Firebase Admin if service account provided
+_ADMIN_INIT_DONE = False
+_ADMIN_DB = None
+
+def init_firebase_admin():
+    global _ADMIN_INIT_DONE, _ADMIN_DB
+    if _ADMIN_INIT_DONE:
+        return
+    if not firebase_admin:
+        return
+
+    sa_json = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
+    sa_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+
+    try:
+        if sa_json:
+            import json
+            cred_dict = json.loads(sa_json)
+            cred = fb_credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+        elif sa_path and os.path.exists(sa_path):
+            cred = fb_credentials.Certificate(sa_path)
+            firebase_admin.initialize_app(cred)
+        else:
+            # no credentials provided; skip admin init
+            return
+
+        _ADMIN_DB = admin_firestore.client()
+        _ADMIN_INIT_DONE = True
+    except Exception as e:
+        print('Failed to initialize firebase admin:', e)
+        _ADMIN_INIT_DONE = False
 
 
 # ----------------------------------------------------------
@@ -246,6 +291,18 @@ class InterviewEvaluationResponse(BaseModel):
     feedback: Optional[str]
     raw_evaluation: Optional[str]
     message: str
+
+
+class ApplicationRequest(BaseModel):
+    jobId: str
+    candidateId: str
+    candidateEmail: Optional[str] = None
+    candidateName: Optional[str] = None
+    role: Optional[str] = None
+    resumeSummary: Optional[str] = None
+    qaList: Optional[List[QAPair]] = None
+    evaluation: Optional[dict] = None
+
 
 
 class TextToSpeechRequest(BaseModel):
@@ -398,6 +455,58 @@ async def upload_resume(file: UploadFile = File(...), role: str = Form(...)):
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
+
+@app.post("/apply")
+async def apply_for_job(app_req: ApplicationRequest):
+    """
+    Accepts an application payload from a candidate and writes an application
+    document into the employer Firestore using the Firebase Admin SDK.
+    Environment:
+      - FIREBASE_SERVICE_ACCOUNT_JSON (optional, JSON string)
+      - GOOGLE_APPLICATION_CREDENTIALS (optional, path to service account)
+    """
+    init_firebase_admin()
+    if not _ADMIN_INIT_DONE or _ADMIN_DB is None:
+        raise HTTPException(status_code=500, detail="Server not configured to persist applications")
+
+    # Basic validation
+    if not app_req.jobId or not app_req.candidateId:
+        raise HTTPException(status_code=400, detail="Missing jobId or candidateId")
+
+    try:
+        job_ref = _ADMIN_DB.collection('jobs').document(app_req.jobId)
+        job_snap = job_ref.get()
+        if not job_snap.exists:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        job_data = job_snap.to_dict() or {}
+        employer_id = job_data.get('employerId')
+
+        application_doc = {
+            'jobId': app_req.jobId,
+            'employerId': employer_id,
+            'candidateId': app_req.candidateId,
+            'candidateEmail': app_req.candidateEmail,
+            'candidateName': app_req.candidateName,
+            'role': app_req.role,
+            'resumeSummary': app_req.resumeSummary,
+            'qaList': [q.dict() for q in (app_req.qaList or [])],
+            'rawEvaluation': app_req.evaluation,
+            'createdAt': admin_firestore.SERVER_TIMESTAMP,
+        }
+
+        apps_ref = _ADMIN_DB.collection('applications')
+        new_ref = apps_ref.document()
+        new_ref.set(application_doc)
+
+        return JSONResponse({ 'success': True, 'applicationId': new_ref.id })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ----------------------------------------------------------
