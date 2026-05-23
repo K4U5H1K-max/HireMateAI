@@ -15,23 +15,42 @@ An AI-powered interview platform that analyzes resumes, generates personalized i
 
 ```
 project/
-├── src/
-│   ├── pages/
-│   │   ├── HomePage.tsx           # Landing page
-│   │   ├── ResumeAnalyzer.tsx     # Resume upload and analysis
-│   │   ├── InterviewScreen.tsx    # Interview Q&A interface
-│   │   └── ResultsPage.tsx        # Evaluation results
-│   ├── config/
-│   │   └── api.ts                 # API endpoint configuration
-│   ├── types/
-│   │   └── index.ts               # TypeScript interfaces
-│   ├── utils/
-│   │   └── pdfGenerator.ts        # PDF generation utility
-│   ├── App.tsx                    # Main app with routing
-│   ├── main.tsx                   # Entry point
-│   └── index.css                  # Global styles
-└── backend.py                     # FastAPI backend (place here)
+├── .env
+├── .env.example
+├── .gitignore
+├── README.md
+├── frontend/
+│   ├── .bolt/
+│   ├── index.html
+│   ├── node_modules/
+│   ├── package-lock.json
+│   ├── package.json
+│   ├── postcss.config.js
+│   ├── src/
+│   │   ├── App.tsx
+│   │   ├── main.tsx
+│   │   ├── config/
+│   │   │   └── api.ts
+│   │   ├── pages/
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   ├── lib/
+│   │   ├── types/
+│   │   └── utils/
+│   ├── start.bat
+│   ├── start.sh
+│   ├── tailwind.config.js
+│   ├── tsconfig.app.json
+│   ├── tsconfig.json
+│   ├── tsconfig.node.json
+│   └── vite.config.ts
+└── backend/
+   ├── backendmp.py
+   ├── requirements.txt
+   └── runtime.txt
 ```
+
+Local-only folders such as `venv/` and `__pycache__/` stay at the project root and are ignored.
 
 ## Setup Instructions
 
@@ -46,11 +65,13 @@ project/
 
 1. Install dependencies:
 ```bash
+cd frontend
 npm install
 ```
 
 2. Start development server:
 ```bash
+cd frontend
 npm run dev
 ```
 
@@ -58,14 +79,13 @@ The frontend will run on `http://localhost:5173`
 
 ### Backend Setup
 
-1. Place the `backend.py` file in the project root directory
-
-2. Install Python dependencies:
+1. Install Python dependencies:
 ```bash
-pip install fastapi uvicorn pyttsx3 speechrecognition google-generativeai pdfminer.six python-multipart
+cd backend
+pip install -r requirements.txt
 ```
 
-3. Set your Gemini API key:
+2. Set your Gemini API key:
 ```bash
 export GEMINI_API_KEY="your-api-key-here"
 ```
@@ -75,9 +95,10 @@ Or on Windows:
 set GEMINI_API_KEY=your-api-key-here
 ```
 
-4. Start the backend server:
+3. Start the backend server:
 ```bash
-python backend.py
+cd backend
+python backendmp.py
 ```
 
 The backend will run on `http://localhost:8000`
@@ -89,11 +110,13 @@ The backend will run on `http://localhost:8000`
 2. Terminal 1 (Backend):
 ```bash
 export GEMINI_API_KEY="your-api-key-here"
-python backend.py
+cd backend
+python backendmp.py
 ```
 
 3. Terminal 2 (Frontend):
 ```bash
+cd frontend
 npm run dev
 ```
 
@@ -153,10 +176,13 @@ npm run dev
 ## Build for Production
 
 ```bash
+cd frontend
 npm run build
 ```
 
-Built files will be in `dist/` directory.
+Run this from `frontend/`.
+
+Built files will be in `frontend/dist/` directory.
 
 ## Notes
 
@@ -164,6 +190,8 @@ Built files will be in `dist/` directory.
 - Backend must be running for all features to work
 - Internet connection required for Google Gemini API
 - Speech recognition requires internet (uses Google Web Speech API)
+- Frontend Vite env vars belong in `frontend/.env`
+- Backend env vars can live in `project/.env` or `backend/.env`
 
 ## Troubleshooting
 
