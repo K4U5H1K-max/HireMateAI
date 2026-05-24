@@ -8,12 +8,21 @@ import { useHybridAnswer } from '../hooks/useHybridAnswer';
 import PageContainer from '../components/layout/PageContainer';
 import InterviewQuestionProgress from '../components/layout/InterviewQuestionProgress';
 import { Button, Card, Badge } from '../components/ui';
+import { translateText, translateToEnglish } from '../utils/translationService';
 
 interface LocationState {
   company: string;
   role: string;
   numQuestions: number;
   resumeSummary: string;
+  language?: string;
+  jobId?: string;
+  isEmployerJob?: boolean;
+}
+
+interface QAPairWithTranslation extends QAPair {
+  originalQuestion: string; // English version
+  translatedQuestion: string; // User's language version
 }
 
 const InterviewScreen = () => {
@@ -22,14 +31,19 @@ const InterviewScreen = () => {
   const state = location.state as LocationState;
 
   const [questions, setQuestions] = useState<string[]>([]);
+  const [translatedQuestions, setTranslatedQuestions] = useState<string[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [qaList, setQaList] = useState<QAPair[]>([]);
+  const [qaList, setQaList] = useState<QAPairWithTranslation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [isTranslating, setIsTranslating] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const answer = useHybridAnswer({ releaseStreamOnStop: true });
+  const answer = useHybridAnswer({ 
+    releaseStreamOnStop: true,
+    language: state?.language || 'en-US'
+  });
 
   useEffect(() => {
     if (!state) {
@@ -76,6 +90,19 @@ const InterviewScreen = () => {
       }
 
       setQuestions(data.questions);
+
+      // Translate questions if language is not English
+      const selectedLang = state?.language || 'en-US';
+      if (selectedLang !== 'en-US' && selectedLang !== 'en-GB') {
+        setIsTranslating(true);
+        const translated = await Promise.all(
+          data.questions.map((q) => translateText(q, selectedLang))
+        );
+        setTranslatedQuestions(translated);
+        setIsTranslating(false);
+      } else {
+        setTranslatedQuestions(data.questions);
+      }
     } catch (err) {
       if (err instanceof TypeError) {
         setError(
@@ -92,10 +119,39 @@ const InterviewScreen = () => {
   const playQuestionAudio = async (questionText: string) => {
     try {
       setIsPlayingAudio(true);
+      
+      // Use translated question for display and narration
+      const selectedLang = state?.language || 'en-US';
+      const textToPlay = selectedLang !== 'en-US' && selectedLang !== 'en-GB' 
+        ? translatedQuestions[currentQuestionIndex] || questionText
+        : questionText;
+
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(textToPlay);
+        utterance.lang = selectedLang;
+        utterance.rate = 1;
+        utterance.onend = () => {
+          setIsPlayingAudio(false);
+        };
+        utterance.onerror = () => {
+          setIsPlayingAudio(false);
+          setError('Audio playback failed');
+        };
+
+        window.speechSynthesis.speak(utterance);
+        return;
+      }
+
       const response = await fetch(API_ENDPOINTS.tts, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: questionText, rate: 150 }),
+        body: JSON.stringify({ 
+          text: textToPlay, 
+          rate: 150,
+          language: selectedLang
+        }),
       });
 
       if (!response.ok) throw new Error('Failed to generate audio');
@@ -118,7 +174,7 @@ const InterviewScreen = () => {
     }
   };
 
-  const handleSubmitAnswer = () => {
+  const handleSubmitAnswer = async () => {
     if (answer.isMicActive) {
       answer.stopRecording();
     }
@@ -129,9 +185,19 @@ const InterviewScreen = () => {
       return;
     }
 
-    const newQA: QAPair = {
-      question: questions[currentQuestionIndex],
-      answer: text,
+    // Translate answer back to English if needed
+    const selectedLang = state?.language || 'en-US';
+    let englishAnswer = text;
+    
+    if (selectedLang !== 'en-US' && selectedLang !== 'en-GB') {
+      englishAnswer = await translateToEnglish(text, selectedLang);
+    }
+
+    const newQA: QAPairWithTranslation = {
+      originalQuestion: questions[currentQuestionIndex],
+      translatedQuestion: translatedQuestions[currentQuestionIndex] || questions[currentQuestionIndex],
+      question: questions[currentQuestionIndex], // English version for LLM
+      answer: englishAnswer, // English version for LLM
     };
 
     const updatedQAList = [...qaList, newQA];
@@ -147,6 +213,8 @@ const InterviewScreen = () => {
           qaList: updatedQAList,
           role: state.role,
           resumeSummary: state.resumeSummary,
+          jobId: state.jobId,
+          isEmployerJob: state.isEmployerJob,
         },
       });
     }
@@ -155,13 +223,17 @@ const InterviewScreen = () => {
   const displayError = error || answer.error;
   const canSubmit = Boolean(answer.finalAnswer.trim());
 
-  if (loading) {
+  if (loading || isTranslating) {
     return (
       <div className="flex-1 flex items-center justify-center py-24">
         <div className="text-center">
           <Loader2 className="w-14 h-14 text-brand animate-spin mx-auto mb-4" />
-          <p className="text-white text-lg">Generating interview questions…</p>
-          <p className="text-gray-500 text-sm mt-2">Tailored to your resume and role</p>
+          <p className="text-white text-lg">
+            {isTranslating ? 'Translating questions…' : 'Generating interview questions…'}
+          </p>
+          <p className="text-gray-500 text-sm mt-2">
+            {isTranslating ? `Translating to ${state?.language || 'en-US'}` : 'Tailored to your resume and role'}
+          </p>
         </div>
       </div>
     );
@@ -184,7 +256,7 @@ const InterviewScreen = () => {
       <Card variant="elevated" padding="lg" className="mb-6">
         <div className="flex items-start gap-4 mb-6">
           <h2 className="text-xl sm:text-2xl text-white flex-1 leading-relaxed">
-            {questions[currentQuestionIndex]}
+            {translatedQuestions[currentQuestionIndex] || questions[currentQuestionIndex]}
           </h2>
           <Button
             variant="secondary"

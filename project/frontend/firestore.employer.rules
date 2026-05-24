@@ -20,7 +20,7 @@ service cloud.firestore {
 
     match /jobs/{jobId} {
       allow create: if signedIn() && request.resource.data.employerId == request.auth.uid;
-      allow read: if signedIn() && resource.data.employerId == request.auth.uid;
+      allow read: if signedIn() && (resource.data.employerId == request.auth.uid || resource.data.status == 'open');
       allow update: if signedIn()
         && resource.data.employerId == request.auth.uid
         && request.resource.data.employerId == resource.data.employerId;
@@ -28,8 +28,11 @@ service cloud.firestore {
     }
 
     match /applications/{applicationId} {
-      allow create: if signedIn() && request.resource.data.employerId == request.auth.uid;
-      allow read, update, delete: if signedIn() && ownsJob(resource.data.jobId);
+      allow create: if signedIn() && request.resource.data.candidateId == request.auth.uid;
+      allow read, update, delete: if signedIn() && (
+        resource.data.candidateId == request.auth.uid ||
+        ownsJob(resource.data.jobId)
+      );
     }
   }
 }

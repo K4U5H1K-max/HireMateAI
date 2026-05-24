@@ -29,6 +29,7 @@ const CandidateLoginPage = () => {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(candidateAuth, provider);
       setSuccess('Candidate Google sign-in successful.');
+      navigate('/student-dashboard');
     } catch (loginError) {
       setError(formatFirebaseError(loginError));
     } finally {
@@ -52,6 +53,7 @@ const CandidateLoginPage = () => {
       await signInWithEmailAndPassword(candidateAuth, email.trim(), password);
       setSuccess('Candidate login successful.');
       setPassword('');
+      navigate('/student-dashboard');
     } catch (loginError) {
       setError(formatFirebaseError(loginError));
     } finally {

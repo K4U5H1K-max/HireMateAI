@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
+import { TrendingUp } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/cn';
 
 interface AnimatedScoreCardProps {
-  icon: LucideIcon;
+  icon?: LucideIcon;
   label: string;
   score: number | undefined;
   delayMs?: number;
-  getScoreColor: (score?: number) => string;
+  getScoreColor?: (score?: number) => string;
+  maxScore?: number;
+  animated?: boolean;
 }
 
 const AnimatedScoreCard = ({
@@ -19,6 +22,8 @@ const AnimatedScoreCard = ({
 }: AnimatedScoreCardProps) => {
   const [visible, setVisible] = useState(false);
   const [barWidth, setBarWidth] = useState('0%');
+  const ScoreIcon = Icon ?? TrendingUp;
+  const scoreClass = getScoreColor ? getScoreColor(score) : 'text-brand';
 
   useEffect(() => {
     const showTimer = window.setTimeout(() => setVisible(true), delayMs);
@@ -39,10 +44,10 @@ const AnimatedScoreCard = ({
       )}
     >
       <div className="flex items-center gap-3 mb-3">
-        <Icon className="w-5 h-5 text-brand shrink-0" />
+        <ScoreIcon className="w-5 h-5 text-brand shrink-0" />
         <h3 className="text-white font-semibold text-sm leading-tight">{label}</h3>
       </div>
-      <div className={cn('text-3xl font-bold mb-3 tabular-nums', getScoreColor(score))}>
+      <div className={cn('text-3xl font-bold mb-3 tabular-nums', scoreClass)}>
         {score?.toFixed(1) ?? 'N/A'}
         {score != null && <span className="text-lg text-gray-500 font-medium">/10</span>}
       </div>

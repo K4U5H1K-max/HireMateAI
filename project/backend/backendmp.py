@@ -1,585 +1,3 @@
-# ----------------------------------------------------------
-#  HireMateAI Backend  —  FINAL STABLE VERSION
-# ----------------------------------------------------------
-'''
-import os
-import warnings
-import time
-import uuid
-import tempfile
-import shutil
-import io
-import re
-import traceback
-from pathlib import Path
-from typing import List, Dict, Optional
-
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel
-
-# Firebase admin (optional) for server-side writes to employer Firestore
-try:
-    import firebase_admin
-    from firebase_admin import credentials as fb_credentials
-    from firebase_admin import firestore as admin_firestore
-    from firebase_admin import auth as fb_auth
-except Exception:
-    firebase_admin = None
-    fb_credentials = None
-    admin_firestore = None
-    fb_auth = None
-
-import pyttsx3
-import speech_recognition as sr
-
-# Optional: Gemini
-try:
-    import google.generativeai as genai
-except Exception:
-    genai = None
-
-from pdfminer.high_level import extract_text
-from pydub import AudioSegment
-from pydub.utils import which
-
-# ----------------------------------------------------------
-# FFMPEG — FIXED & STABLE
-# ----------------------------------------------------------
-FFMPEG_EXE = r"C:\ffmpeg\ffmpegfile\bin\ffmpeg.exe"
-FFPROBE_EXE = r"C:\ffmpeg\ffmpegfile\bin\ffprobe.exe"
-
-# Converter
-if os.path.exists(FFMPEG_EXE):
-    AudioSegment.converter = FFMPEG_EXE
-else:
-    fallback = which("ffmpeg")
-    if fallback:
-        AudioSegment.converter = fallback
-    else:
-        print("❌ FFMPEG NOT FOUND. Audio conversion will fail.")
-
-# Probe
-if os.path.exists(FFPROBE_EXE):
-    AudioSegment.ffprobe = FFPROBE_EXE
-
-# ----------------------------------------------------------
-# BASIC
-# ----------------------------------------------------------
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-warnings.filterwarnings('ignore')
-
-def load_env_file(env_path: Path) -> Dict[str, str]:
-    values: Dict[str, str] = {}
-    if not env_path.exists():
-        return values
-
-    try:
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            if stripped.startswith("export "):
-                stripped = stripped[len("export "):].strip()
-            if "=" not in stripped:
-                continue
-            key, value = stripped.split("=", 1)
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            if key:
-                values[key] = value
-    except Exception:
-        return values
-
-    return values
-
-
-def load_api_key_from_env_files() -> Optional[str]:
-    project_dir = Path(__file__).resolve().parent
-    candidate_files = [project_dir / ".env", project_dir.parent / ".env"]
-
-    for env_path in candidate_files:
-        values = load_env_file(env_path)
-        api_key = values.get("GEMINI_API_KEY") or values.get("GOOGLE_API_KEY")
-        if api_key:
-            os.environ.setdefault("GEMINI_API_KEY", api_key)
-            os.environ.setdefault("GOOGLE_API_KEY", api_key)
-            return api_key
-
-    return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-
-
-GEMINI_API_KEY = load_api_key_from_env_files()
-if GEMINI_API_KEY and genai:
-    genai.configure(api_key=GEMINI_API_KEY)
-
-try:
-    model = genai.GenerativeModel("models/gemini-2.5-flash") if genai else None
-except:
-    model = None
-
-recognizer = sr.Recognizer()
-recognizer.pause_threshold = 1.2
-
-# ----------------------------------------------------------
-# FASTAPI
-# ----------------------------------------------------------
-app = FastAPI(title="HireMate AI API", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-QUESTIONS_STORE: Dict[str, Dict] = {}
-QUESTIONS_TTL_SECONDS = 3600
-
-# Initialize Firebase Admin if service account provided
-_ADMIN_INIT_DONE = False
-_ADMIN_DB = None
-
-def init_firebase_admin():
-    global _ADMIN_INIT_DONE, _ADMIN_DB
-    if _ADMIN_INIT_DONE:
-        return
-    if not firebase_admin:
-        return
-
-    sa_json = os.getenv('FIREBASE_SERVICE_ACCOUNT_JSON')
-    sa_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
-
-    try:
-        if sa_json:
-            import json
-            cred_dict = json.loads(sa_json)
-            cred = fb_credentials.Certificate(cred_dict)
-            firebase_admin.initialize_app(cred)
-        elif sa_path and os.path.exists(sa_path):
-            cred = fb_credentials.Certificate(sa_path)
-            firebase_admin.initialize_app(cred)
-        else:
-            # no credentials provided; skip admin init
-            return
-
-        _ADMIN_DB = admin_firestore.client()
-        _ADMIN_INIT_DONE = True
-    except Exception as e:
-        print('Failed to initialize firebase admin:', e)
-        _ADMIN_INIT_DONE = False
-
-
-# ----------------------------------------------------------
-# HELPERS
-# ----------------------------------------------------------
-def ensure_model_ready():
-    if model is None:
-        raise HTTPException(status_code=500, detail="Model not initialized")
-    return True
-
-
-def extract_resume_text_from_file(file_path: str) -> Optional[str]:
-    try:
-        if file_path.endswith(".pdf"):
-            return extract_text(file_path)
-        elif file_path.endswith(".txt"):
-            try:
-                return open(file_path, "r", encoding="utf-8").read()
-            except Exception:
-                with open(file_path, "rb") as f:
-                    raw = f.read()
-                if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
-                    return raw.decode("utf-16", errors="ignore")
-                return raw.decode("utf-8", errors="ignore")
-    except:
-        return None
-    return None
-
-
-def parse_scores_from_text(text: str):
-    out = {"technical": None, "communication": None, "role_fit": None, "final": None, "feedback": None}
-    try:
-        m = re.search(r"Technical.*?(\d+(?:\.\d+)?)", text, re.I)
-        if m: out["technical"] = float(m.group(1))
-
-        m = re.search(r"Communication.*?(\d+(?:\.\d+)?)", text, re.I)
-        if m: out["communication"] = float(m.group(1))
-
-        m = re.search(r"(Role[- ]?fit).*?(\d+(?:\.\d+)?)", text, re.I)
-        if m: out["role_fit"] = float(m.group(2))
-
-        m = re.search(r"(Final|Overall).*?(\d+(?:\.\d+)?)", text, re.I)
-        if m: out["final"] = float(m.group(2))
-
-        m = re.search(r"(Feedback|Recommendation)[:\-]?\s*(.+)", text, re.I | re.S)
-        if m: out["feedback"] = m.group(2).strip()
-    except:
-        pass
-    return out
-
-
-def simple_summary(text: str, max_sentences: int = 2) -> str:
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    sentences = [s for s in sentences if s]
-    if not sentences:
-        return text[:200].strip()
-    return " ".join(sentences[:max_sentences]).strip()
-
-
-def simple_resume_evaluation(text: str, role: str) -> str:
-    keywords = [
-        "python", "java", "react", "node", "docker", "aws",
-        "sql", "tensorflow", "pytorch", "machine learning", "ml",
-    ]
-    lowered = text.lower()
-    matches = [keyword for keyword in keywords if keyword in lowered]
-    technical_score = min(10.0, 3.0 + len(matches) * 1.2)
-    communication_score = 6.0 if len(text.split()) > 120 else 5.0
-    feedback = (
-        f"Technical Score: {technical_score:.1f}/10\n"
-        f"Communication Score: {communication_score:.1f}/10\n"
-        f"Recommendation: Resume appears relevant for {role}."
-    )
-    return feedback
-
-
-# ----------------------------------------------------------
-# MODELS
-# ----------------------------------------------------------
-class ResumeEvaluationResponse(BaseModel):
-    success: bool
-    resume_text: Optional[str] = None
-    resume_summary: str
-    evaluation: str
-    message: str
-
-
-class QuestionGenerationRequest(BaseModel):
-    company: str
-    role: str
-    resume_summary: str
-    num_questions: int
-
-
-class QuestionGenerationResponse(BaseModel):
-    success: bool
-    session_id: str
-    questions: List[str]
-    message: str
-
-
-class QAPair(BaseModel):
-    question: str
-    answer: str
-
-
-class InterviewEvaluationRequest(BaseModel):
-    qa_list: List[QAPair]
-    role: str
-    resume_summary: str
-
-
-class InterviewEvaluationResponse(BaseModel):
-    success: bool
-    technical_score: Optional[float]
-    communication_score: Optional[float]
-    role_fit_score: Optional[float]
-    final_score: Optional[float]
-    feedback: Optional[str]
-    raw_evaluation: Optional[str]
-    message: str
-
-
-class ApplicationRequest(BaseModel):
-    jobId: str
-    candidateId: str
-    candidateEmail: Optional[str] = None
-    candidateName: Optional[str] = None
-    role: Optional[str] = None
-    resumeSummary: Optional[str] = None
-    qaList: Optional[List[QAPair]] = None
-    evaluation: Optional[dict] = None
-
-
-
-class TextToSpeechRequest(BaseModel):
-    text: str
-    rate: Optional[int] = 150
-
-
-class SpeechToTextResponse(BaseModel):
-    success: bool
-    transcription: str
-    message: str
-
-
-# ----------------------------------------------------------
-# ROOT
-# ----------------------------------------------------------
-@app.get("/")
-async def root():
-    return {"message": "HireMate AI API is running"}
-
-
-# ----------------------------------------------------------
-# SPEECH TO TEXT — *FULLY FIXED*
-# ----------------------------------------------------------
-@app.post("/speech_to_text", response_model=SpeechToTextResponse)
-async def speech_to_text(audio_file: UploadFile = File(...)):
-    """
-    FIXED:
-    - Always converts to WAV PCM 16k Mono
-    - Works with .webm from your React MediaRecorder
-    - Stable Google SpeechRecognizer transcription
-    """
-
-    tmp_in = None
-    tmp_wav = None
-
-    try:
-        # Save uploaded file
-        ext = os.path.splitext(audio_file.filename)[1].lower()
-        if ext not in [".webm", ".ogg", ".mp3", ".wav", ".m4a"]:
-            ext = ".webm"
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            shutil.copyfileobj(audio_file.file, tmp)
-            tmp_in = tmp.name
-
-        # Convert to WAV 16k mono
-        audio = AudioSegment.from_file(tmp_in)
-        audio = audio.set_channels(1).set_frame_rate(16000)
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp2:
-            tmp_wav = tmp2.name
-            audio.export(tmp_wav, format="wav")
-
-        # Transcribe
-        with sr.AudioFile(tmp_wav) as source:
-            recognizer.adjust_for_ambient_noise(source, duration=0.3)
-            audio_data = recognizer.record(source)
-
-        text = recognizer.recognize_google(audio_data)
-
-        return SpeechToTextResponse(
-            success=True,
-            transcription=text,
-            message="OK"
-        )
-
-    except sr.UnknownValueError:
-        return SpeechToTextResponse(success=False, transcription="", message="Could not understand audio")
-
-    except Exception as e:
-        return SpeechToTextResponse(success=False, transcription="", message=str(e))
-
-    finally:
-        if tmp_in and os.path.exists(tmp_in):
-            os.unlink(tmp_in)
-        if tmp_wav and os.path.exists(tmp_wav):
-            os.unlink(tmp_wav)
-
-
-# ----------------------------------------------------------
-# TTS (unchanged)
-# ----------------------------------------------------------
-@app.post("/tts")
-async def text_to_speech(tts_req: TextToSpeechRequest):
-    engine = pyttsx3.init()
-    engine.setProperty("rate", tts_req.rate)
-
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-    tmp_path = tmp.name
-    tmp.close()
-
-    engine.save_to_file(tts_req.text, tmp_path)
-    engine.runAndWait()
-    engine.stop()
-
-    audio = open(tmp_path, "rb").read()
-    os.unlink(tmp_path)
-
-    return StreamingResponse(io.BytesIO(audio), media_type="audio/wav")
-
-
-# ----------------------------------------------------------
-# Resume Upload (unchanged)
-# ----------------------------------------------------------
-@app.post("/upload_resume", response_model=ResumeEvaluationResponse)
-async def upload_resume(file: UploadFile = File(...), role: str = Form(...)):
-    tmp_path = None
-    try:
-        suffix = ".pdf" if file.filename.endswith(".pdf") else ".txt"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            shutil.copyfileobj(file.file, tmp)
-            tmp_path = tmp.name
-
-        text = extract_resume_text_from_file(tmp_path)
-        if not text:
-            return ResumeEvaluationResponse(success=False, resume_summary="N/A", evaluation="N/A",
-                                            message="Resume unreadable")
-
-        summary = None
-        evaluation_text = None
-
-        if model is not None:
-            try:
-                ensure_model_ready()
-
-                resp = model.generate_content(
-                    f"You are a concise resume evaluator for role: {role}.\nResume:\n{text[:3000]}\n"
-                    "Give:\nTechnical Score: X/10\nFeedback (2 sentences)"
-                )
-                evaluation_text = resp.text.strip()
-
-                summary = model.generate_content(
-                    f"Summarize this resume in 2 sentences:\n{text[:2000]}"
-                ).text.strip()
-            except Exception as e:
-                print("Resume analysis model call failed, falling back:", e)
-
-        if not summary or not evaluation_text:
-            summary = simple_summary(text, max_sentences=2)
-            evaluation_text = simple_resume_evaluation(text, role)
-
-        return ResumeEvaluationResponse(
-            success=True,
-            resume_text=text[:1000],
-            resume_summary=summary,
-            evaluation=evaluation_text,
-            message="Resume evaluated"
-        )
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-
-
-@app.post("/apply")
-async def apply_for_job(app_req: ApplicationRequest):
-    """
-    Accepts an application payload from a candidate and writes an application
-    document into the employer Firestore using the Firebase Admin SDK.
-    Environment:
-      - FIREBASE_SERVICE_ACCOUNT_JSON (optional, JSON string)
-      - GOOGLE_APPLICATION_CREDENTIALS (optional, path to service account)
-    """
-    init_firebase_admin()
-    if not _ADMIN_INIT_DONE or _ADMIN_DB is None:
-        raise HTTPException(status_code=500, detail="Server not configured to persist applications")
-
-    # Basic validation
-    if not app_req.jobId or not app_req.candidateId:
-        raise HTTPException(status_code=400, detail="Missing jobId or candidateId")
-
-    try:
-        job_ref = _ADMIN_DB.collection('jobs').document(app_req.jobId)
-        job_snap = job_ref.get()
-        if not job_snap.exists:
-            raise HTTPException(status_code=404, detail="Job not found")
-
-        job_data = job_snap.to_dict() or {}
-        employer_id = job_data.get('employerId')
-
-        application_doc = {
-            'jobId': app_req.jobId,
-            'employerId': employer_id,
-            'candidateId': app_req.candidateId,
-            'candidateEmail': app_req.candidateEmail,
-            'candidateName': app_req.candidateName,
-            'role': app_req.role,
-            'resumeSummary': app_req.resumeSummary,
-            'qaList': [q.dict() for q in (app_req.qaList or [])],
-            'rawEvaluation': app_req.evaluation,
-            'createdAt': admin_firestore.SERVER_TIMESTAMP,
-        }
-
-        apps_ref = _ADMIN_DB.collection('applications')
-        new_ref = apps_ref.document()
-        new_ref.set(application_doc)
-
-        return JSONResponse({ 'success': True, 'applicationId': new_ref.id })
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ----------------------------------------------------------
-# Generate Questions (unchanged)
-# ----------------------------------------------------------
-@app.post("/generate_questions", response_model=QuestionGenerationResponse)
-async def generate_questions(request: QuestionGenerationRequest):
-    ensure_model_ready()
-
-    num = max(1, min(15, request.num_questions))
-
-    resp = model.generate_content(
-        f"Generate {num} short interview questions for {request.role} at {request.company}.\n"
-        f"Resume summary: {request.resume_summary}\nNumbered list:"
-    )
-
-    raw = resp.text.split("\n")
-    questions = [re.sub(r"^\d+\.\s*", "", q).strip() for q in raw if q.strip()]
-
-    session_id = str(uuid.uuid4())
-    QUESTIONS_STORE[session_id] = {"questions": questions, "created": time.time()}
-
-    return QuestionGenerationResponse(success=True, session_id=session_id, questions=questions, message="OK")
-
-
-@app.get("/questions/{session_id}")
-async def get_questions(session_id: str):
-    data = QUESTIONS_STORE.get(session_id)
-    if not data:
-        raise HTTPException(404, "Session expired")
-    return {"success": True, "questions": data["questions"]}
-
-
-# ----------------------------------------------------------
-# Interview Evaluation (unchanged)
-# ----------------------------------------------------------
-@app.post("/evaluate_interview", response_model=InterviewEvaluationResponse)
-async def evaluate_interview(req: InterviewEvaluationRequest):
-    ensure_model_ready()
-
-    qa_text = "\n".join([f"Q: {q.question}\nA: {q.answer}\n" for q in req.qa_list])
-
-    resp = model.generate_content(
-        f"Evaluate interview for role {req.role}.\nResume summary: {req.resume_summary}\nTranscript:\n{qa_text}\n"
-        "Give:\nTechnical Score: X/10\nCommunication Score: X/10\nRole-fit Score: X/10\nFinal Score: X/10\n"
-        "Feedback (3–5 sentences)"
-    )
-
-    parsed = parse_scores_from_text(resp.text)
-    final = parsed["final"]
-
-    if final is None and all(parsed[x] for x in ["technical", "communication", "role_fit"]):
-        final = round((parsed["technical"] + parsed["communication"] + parsed["role_fit"]) / 3, 2)
-
-    return InterviewEvaluationResponse(
-        success=True,
-        technical_score=parsed["technical"],
-        communication_score=parsed["communication"],
-        role_fit_score=parsed["role_fit"],
-        final_score=final,
-        feedback=parsed["feedback"],
-        raw_evaluation=resp.text,
-        message="Evaluation complete"
-    )
-
-
-# ----------------------------------------------------------
-# RUN
-# ----------------------------------------------------------
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-    '''
 
 # ----------------------------------------------------------
 #  HireMateAI Backend  —  FINAL WORKING VERSION
@@ -612,6 +30,11 @@ try:
     import google.generativeai as genai
 except Exception:
     genai = None
+try:
+    from google.cloud import translate_v2 as translate
+except Exception:
+    translate = None
+
 
 def _prepend_path(directory: str) -> None:
     if directory and os.path.isdir(directory):
@@ -829,6 +252,170 @@ app = FastAPI(
     title="HireMate AI API",
     version="1.0.0"
 )
+class TranslationRequest(BaseModel):
+    text: str
+    target_language: str
+
+
+class TranslationResponse(BaseModel):
+    success: bool
+    original_text: str
+    translated_text: str
+    source_language: str
+    target_language: str
+    message: str
+# ----------------------------------------------------------
+# TRANSLATION ENDPOINTS
+# ----------------------------------------------------------
+def get_target_lang_code(lang_code: str) -> str:
+    """Convert language code to Google Translate target language code."""
+    lang_map = {
+        'en-US': 'en', 'en-GB': 'en',
+        'es-ES': 'es', 'fr-FR': 'fr', 'de-DE': 'de', 'it-IT': 'it',
+        'pt-BR': 'pt', 'ja-JP': 'ja', 'ko-KR': 'ko',
+        'zh-CN': 'zh-CN', 'zh-TW': 'zh-TW', 'ru-RU': 'ru',
+        'ar-SA': 'ar',
+        # Indian languages
+        'hi-IN': 'hi', 'ml-IN': 'ml', 'te-IN': 'te', 'mr-IN': 'mr',
+        'ur-IN': 'ur', 'bn-IN': 'bn', 'as-IN': 'as', 'or-IN': 'or'
+    }
+    return lang_map.get(lang_code, 'en')
+
+translation_client = None
+try:
+    if not translate:
+        print("❌ google.cloud.translate_v2 import failed - translation disabled")
+    else:
+        # Try to use credentials from environment or keyfile
+        credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+        if credentials_path and os.path.exists(credentials_path):
+            try:
+                from google.oauth2 import service_account
+                credentials = service_account.Credentials.from_service_account_file(
+                    credentials_path,
+                    scopes=['https://www.googleapis.com/auth/cloud-platform']
+                )
+                translation_client = translate.Client(credentials=credentials)
+                print("✅ Translation client initialized with service account credentials")
+            except Exception as e:
+                print(f"⚠️  Could not use service account credentials: {e}")
+                try:
+                    translation_client = translate.Client()
+                    print("✅ Translation client initialized with application default credentials")
+                except Exception as e2:
+                    print(f"❌ Translation client fallback failed: {e2}")
+                    translation_client = None
+        else:
+            try:
+                translation_client = translate.Client()
+                print("✅ Translation client initialized (using default credentials)")
+            except Exception as e:
+                print(f"❌ Translation client initialization failed: {e}")
+                translation_client = None
+except Exception as e:
+    print(f"❌ Unexpected error during translation client setup: {e}")
+    translation_client = None
+
+@app.post("/translate", response_model=TranslationResponse)
+async def translate_text(req: TranslationRequest):
+    """
+    Translate text from English to target language (or vice versa).
+    
+    target_language: Language code (e.g., 'hi-IN', 'ml-IN', etc.)
+    """
+    if not translation_client:
+        return TranslationResponse(
+            success=False,
+            original_text=req.text,
+            translated_text=req.text,
+            source_language="en",
+            target_language=req.target_language,
+            message="Translation service not available"
+        )
+
+    try:
+        target_lang = get_target_lang_code(req.target_language)
+        
+        # Translate English to target language using google-cloud-translate v2 API
+        result = translation_client.translate(
+            req.text,
+            source_language='en',
+            target_language=target_lang
+        )
+        
+        # Result is a dictionary with 'translatedText' and other fields
+        translated = result.get('translatedText', req.text) if result else req.text
+        
+        return TranslationResponse(
+            success=True,
+            original_text=req.text,
+            translated_text=translated,
+            source_language="en",
+            target_language=req.target_language,
+            message="Translation successful"
+        )
+    except Exception as e:
+        print(f"Translation error: {e}")
+        return TranslationResponse(
+            success=False,
+            original_text=req.text,
+            translated_text=req.text,
+            source_language="en",
+            target_language=req.target_language,
+            message=f"Translation failed: {str(e)}"
+        )
+
+
+@app.post("/translate-to-english", response_model=TranslationResponse)
+async def translate_to_english(req: TranslationRequest):
+    """
+    Translate text from target language back to English.
+    
+    target_language: Original language code (e.g., 'hi-IN', 'ml-IN', etc.)
+    """
+    if not translation_client:
+        return TranslationResponse(
+            success=False,
+            original_text=req.text,
+            translated_text=req.text,
+            source_language=req.target_language,
+            target_language="en",
+            message="Translation service not available"
+        )
+
+    try:
+        source_lang = get_target_lang_code(req.target_language)
+        
+        # Translate from target language back to English using google-cloud-translate v2 API
+        result = translation_client.translate(
+            req.text,
+            source_language=source_lang,
+            target_language='en'
+        )
+        
+        # Result is a dictionary with 'translatedText' and other fields
+        translated = result.get('translatedText', req.text) if result else req.text
+        
+        return TranslationResponse(
+            success=True,
+            original_text=req.text,
+            translated_text=translated,
+            source_language=req.target_language,
+            target_language="en",
+            message="Translation successful"
+        )
+    except Exception as e:
+        print(f"Translation error: {e}")
+        return TranslationResponse(
+            success=False,
+            original_text=req.text,
+            translated_text=req.text,
+            source_language=req.target_language,
+            target_language="en",
+            message=f"Translation failed: {str(e)}"
+        )
+
+
 
 def _env_flag(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
@@ -1083,7 +670,9 @@ def fallback_interview_questions(
 
 
 def simple_resume_evaluation(text: str, role: str):
-
+    """
+    Fallback keyword-based evaluation when LLM is unavailable.
+    """
     keywords = [
         "python",
         "java",
@@ -1107,18 +696,94 @@ def simple_resume_evaluation(text: str, role: str):
     ]
 
     technical_score = min(10.0, 3.0 + len(matches) * 1.2)
-
-    communication_score = (
-        6.0 if len(text.split()) > 120 else 5.0
-    )
+    communication_score = 6.0 if len(text.split()) > 120 else 5.0
+    experience_score = 5.0 + (len(matches) * 0.5)
 
     feedback = (
         f"Technical Score: {technical_score:.1f}/10\n"
         f"Communication Score: {communication_score:.1f}/10\n"
+        f"Experience Score: {experience_score:.1f}/10\n"
         f"Recommendation: Resume appears relevant for {role}."
     )
 
-    return feedback
+    return feedback, technical_score, communication_score, experience_score
+
+
+def parse_resume_scores(evaluation_text: str) -> tuple:
+    """
+    Parse LLM evaluation text to extract scores.
+    Returns: (evaluation_text, tech_score, comm_score, exp_score, overall_score)
+    """
+    import re
+    
+    technical_score = None
+    communication_score = None
+    experience_score = None
+    overall_score = None
+    role_fit_score = None
+    
+    try:
+        # Extract Technical Score
+        tech_match = re.search(r'Technical\s+Score[:\s]+([0-9.]+)', evaluation_text, re.IGNORECASE)
+        if tech_match:
+            technical_score = float(tech_match.group(1))
+        
+        # Extract Communication Score
+        comm_match = re.search(r'Communication\s+Score[:\s]+([0-9.]+)', evaluation_text, re.IGNORECASE)
+        if comm_match:
+            communication_score = float(comm_match.group(1))
+        
+        # Extract Experience Score
+        exp_match = re.search(r'Experience\s+Score[:\s]+([0-9.]+)', evaluation_text, re.IGNORECASE)
+        if exp_match:
+            experience_score = float(exp_match.group(1))
+        
+        # Extract Overall/Final Score
+        overall_match = re.search(r'Overall\s+Score[:\s]+([0-9.]+)', evaluation_text, re.IGNORECASE)
+        if overall_match:
+            overall_score = float(overall_match.group(1))
+        
+        # Extract Role Fit Score
+        fit_match = re.search(r'Role\s+Fit\s+Score[:\s]+([0-9.]+)', evaluation_text, re.IGNORECASE)
+        if fit_match:
+            role_fit_score = float(fit_match.group(1))
+    except Exception as e:
+        print(f"Error parsing scores: {e}")
+    
+    return technical_score, communication_score, experience_score, role_fit_score, overall_score
+
+
+def evaluate_resume_with_llm(text: str, role: str) -> tuple:
+    """
+    Use LLM to evaluate resume with structured scoring.
+    Returns: (evaluation_text, tech_score, comm_score, exp_score, overall_score)
+    """
+    prompt = f"""You are a professional resume evaluator for the role of {role}.
+
+Please evaluate this resume and provide structured scores:
+
+Resume:
+{text[:3500]}
+
+Provide your evaluation in this exact format:
+Technical Score: X/10
+Communication Score: X/10
+Experience Score: X/10
+Role Fit Score: X/10
+Overall Score: X/10
+
+Followed by:
+Key Strengths: [2-3 bullet points]
+Areas for Improvement: [2-3 bullet points]
+Recommendation: [1-2 sentences]
+"""
+    
+    evaluation_text = call_gemini(prompt)
+    if not evaluation_text:
+        return None, None, None, None, None
+    
+    tech_score, comm_score, exp_score, fit_score, overall_score = parse_resume_scores(evaluation_text)
+    return evaluation_text, tech_score, comm_score, exp_score, overall_score
 
 # ----------------------------------------------------------
 # RESPONSE MODELS
@@ -1128,6 +793,11 @@ class ResumeEvaluationResponse(BaseModel):
     resume_text: Optional[str] = None
     resume_summary: str
     evaluation: str
+    technical_score: Optional[float] = None
+    communication_score: Optional[float] = None
+    experience_score: Optional[float] = None
+    role_fit_score: Optional[float] = None
+    overall_score: Optional[float] = None
     message: str
 
 
@@ -1296,7 +966,8 @@ async def root():
     response_model=SpeechToTextResponse
 )
 async def speech_to_text(
-    audio_file: UploadFile = File(...)
+    audio_file: UploadFile = File(...),
+    language: str = Form(default="en-US")
 ):
 
     tmp_in = None
@@ -1347,7 +1018,7 @@ async def speech_to_text(
 
             audio_data = recognizer.record(source)
 
-        text = recognizer.recognize_google(audio_data)
+        text = recognizer.recognize_google(audio_data, language=language)
 
         return SpeechToTextResponse(
             success=True,
@@ -1473,48 +1144,36 @@ async def upload_resume(
                 message="Resume unreadable"
             )
 
-        evaluation_text = call_gemini(
-            f"""
-            You are a professional resume evaluator.
-
-            Role: {role}
-
-            Resume:
-            {text[:3000]}
-
-            Give:
-            Technical Score: X/10
-            Communication Score: X/10
-            Feedback in 3 concise sentences.
-            """
-        )
-
+        # Generate summary
         summary = call_gemini(
-            f"""
-            Summarize this resume in 2 concise sentences:
+            f"""Summarize this resume in 2 concise sentences:
 
             {text[:2000]}
             """
         )
-
-        used_fallback = not summary or not evaluation_text
-
-        if used_fallback:
+        if not summary:
             summary = simple_summary(text)
-            evaluation_text = simple_resume_evaluation(text, role)
 
-        message = "Resume evaluated successfully"
-        if used_fallback and model is not None:
-            message = (
-                "Resume evaluated using offline scoring "
-                "(Gemini quota unavailable or API error)"
-            )
+        # Evaluate resume with LLM
+        evaluation_text, technical_score, communication_score, experience_score, overall_score = evaluate_resume_with_llm(text, role)
+
+        # Fallback to keyword-based evaluation if LLM fails
+        if not evaluation_text:
+            evaluation_text, technical_score, communication_score, experience_score = simple_resume_evaluation(text, role)
+            overall_score = (technical_score + communication_score + experience_score) / 3 if all([technical_score, communication_score, experience_score]) else None
+            message = "Resume evaluated using offline scoring (Gemini unavailable)"
+        else:
+            message = "Resume evaluated successfully with LLM"
 
         return ResumeEvaluationResponse(
             success=True,
             resume_text=text[:1000],
             resume_summary=summary,
             evaluation=evaluation_text,
+            technical_score=technical_score,
+            communication_score=communication_score,
+            experience_score=experience_score,
+            overall_score=overall_score,
             message=message
         )
 

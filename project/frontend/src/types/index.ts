@@ -3,6 +3,11 @@ export interface ResumeEvaluationResponse {
   resume_text?: string;
   resume_summary: string;
   evaluation: string;
+  technical_score?: number;
+  communication_score?: number;
+  experience_score?: number;
+  role_fit_score?: number;
+  overall_score?: number;
   message: string;
 }
 

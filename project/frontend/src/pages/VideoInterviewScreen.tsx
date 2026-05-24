@@ -9,12 +9,21 @@ import { GestureAnalyzer } from '../utils/gestureAnalysis';
 import PageContainer from '../components/layout/PageContainer';
 import InterviewQuestionProgress from '../components/layout/InterviewQuestionProgress';
 import { Button, Card, Badge } from '../components/ui';
+import { translateText, translateToEnglish } from '../utils/translationService';
 
 interface LocationState {
   company: string;
   role: string;
   numQuestions: number;
   resumeSummary: string;
+  language?: string;
+  jobId?: string;
+  isEmployerJob?: boolean;
+}
+
+interface QAPairWithTranslation extends QAPair {
+  originalQuestion: string;
+  translatedQuestion: string;
 }
 
 type PermissionStatus = 'pending' | 'granted' | 'denied';
@@ -34,9 +43,11 @@ const VideoInterviewScreen = () => {
   const [permissionStatus, setPermissionStatus] = useState<PermissionStatus>('pending');
   const [permissionError, setPermissionError] = useState('');
   const [questions, setQuestions] = useState<string[]>([]);
+  const [translatedQuestions, setTranslatedQuestions] = useState<string[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [qaList, setQaList] = useState<QAPair[]>([]);
+  const [qaList, setQaList] = useState<QAPairWithTranslation[]>([]);
   const [loadingQuestions, setLoadingQuestions] = useState(false);
+  const [isTranslating, setIsTranslating] = useState(false);
   const [error, setError] = useState('');
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [gestureReady, setGestureReady] = useState(false);
@@ -56,6 +67,7 @@ const VideoInterviewScreen = () => {
   const answer = useHybridAnswer({
     releaseStreamOnStop: false,
     getAudioStream: getInterviewAudioStream,
+    language: state?.language || 'en-US',
     onRecordingStart: () => {
       if (gestureReady && gestureAnalyzerRef.current && videoNodeRef.current) {
         gestureAnalyzerRef.current.start(videoNodeRef.current);
@@ -191,6 +203,19 @@ const VideoInterviewScreen = () => {
       }
 
       setQuestions(data.questions);
+
+      // Translate questions if language is not English
+      const selectedLang = state?.language || 'en-US';
+      if (selectedLang !== 'en-US' && selectedLang !== 'en-GB') {
+        setIsTranslating(true);
+        const translated = await Promise.all(
+          data.questions.map((q) => translateText(q, selectedLang))
+        );
+        setTranslatedQuestions(translated);
+        setIsTranslating(false);
+      } else {
+        setTranslatedQuestions(data.questions);
+      }
     } catch (err) {
       if (err instanceof TypeError) {
         setError('Cannot reach the backend. Start it with: python backendmp.py');
@@ -308,10 +333,39 @@ const VideoInterviewScreen = () => {
   const playQuestionAudio = async (questionText: string) => {
     try {
       setIsPlayingAudio(true);
+
+      // Use translated question for display and narration
+      const selectedLang = state?.language || 'en-US';
+      const textToPlay = selectedLang !== 'en-US' && selectedLang !== 'en-GB' 
+        ? translatedQuestions[currentQuestionIndex] || questionText
+        : questionText;
+
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(textToPlay);
+        utterance.lang = selectedLang;
+        utterance.rate = 1;
+        utterance.onend = () => {
+          setIsPlayingAudio(false);
+        };
+        utterance.onerror = () => {
+          setIsPlayingAudio(false);
+          setError('Question narration failed');
+        };
+
+        window.speechSynthesis.speak(utterance);
+        return;
+      }
+
       const response = await fetch(API_ENDPOINTS.tts, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: questionText, rate: 150 }),
+        body: JSON.stringify({ 
+          text: textToPlay, 
+          rate: 150,
+          language: selectedLang
+        }),
       });
 
       if (!response.ok) throw new Error('Failed to generate audio');
@@ -334,7 +388,7 @@ const VideoInterviewScreen = () => {
     }
   };
 
-  const handleSubmitAnswer = () => {
+  const handleSubmitAnswer = async () => {
     if (answer.isMicActive) {
       answer.stopRecording();
     }
@@ -345,9 +399,19 @@ const VideoInterviewScreen = () => {
       return;
     }
 
-    const newQA: QAPair = {
-      question: questions[currentQuestionIndex],
-      answer: text,
+    // Translate answer back to English if needed
+    const selectedLang = state?.language || 'en-US';
+    let englishAnswer = text;
+    
+    if (selectedLang !== 'en-US' && selectedLang !== 'en-GB') {
+      englishAnswer = await translateToEnglish(text, selectedLang);
+    }
+
+    const newQA: QAPairWithTranslation = {
+      originalQuestion: questions[currentQuestionIndex],
+      translatedQuestion: translatedQuestions[currentQuestionIndex] || questions[currentQuestionIndex],
+      question: questions[currentQuestionIndex], // English version for LLM
+      answer: englishAnswer, // English version for LLM
       nonverbal: pendingMetricsRef.current ?? undefined,
     };
 
@@ -367,6 +431,8 @@ const VideoInterviewScreen = () => {
           role: state!.role,
           resumeSummary: state!.resumeSummary,
           isVideoInterview: true,
+          jobId: state?.jobId,
+          isEmployerJob: state?.isEmployerJob,
         },
       });
     }
@@ -375,8 +441,8 @@ const VideoInterviewScreen = () => {
   const displayError = error || answer.error;
   const canSubmit = Boolean(answer.finalAnswer.trim());
 
-  const showInterview = permissionStatus === 'granted' && questions.length > 0 && !loadingQuestions;
-  const showLoading = permissionStatus === 'granted' && (loadingQuestions || questions.length === 0);
+  const showInterview = permissionStatus === 'granted' && questions.length > 0 && !loadingQuestions && !isTranslating;
+  const showLoading = permissionStatus === 'granted' && (loadingQuestions || isTranslating || questions.length === 0);
 
   if (!state) return null;
 
@@ -415,7 +481,9 @@ const VideoInterviewScreen = () => {
         {showLoading && (
           <div className="text-center mb-6">
             <Loader2 className="w-10 h-10 text-brand animate-spin mx-auto mb-3" />
-            <p className="text-white">{error || 'Generating interview questions…'}</p>
+            <p className="text-white">
+              {isTranslating ? `Translating to ${state?.language || 'en-US'}…` : error || 'Generating interview questions…'}
+            </p>
             {error && (
               <Button className="mt-4" onClick={generateQuestions}>
                 Retry
@@ -485,7 +553,7 @@ const VideoInterviewScreen = () => {
                   Interview question
                 </p>
                 <h2 className="text-xl text-white pr-12 leading-relaxed">
-                  {questions[currentQuestionIndex]}
+                  {translatedQuestions[currentQuestionIndex] || questions[currentQuestionIndex]}
                 </h2>
               </Card>
 

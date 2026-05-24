@@ -7,14 +7,16 @@ export interface RadarAxis {
 }
 
 interface ScoreRadarChartProps {
-  axes: RadarAxis[];
+  axes?: RadarAxis[];
+  data?: Record<string, number | undefined>;
   className?: string;
   size?: number;
 }
 
-const ScoreRadarChart = ({ axes, className, size = 280 }: ScoreRadarChartProps) => {
+const ScoreRadarChart = ({ axes, data, className, size = 280 }: ScoreRadarChartProps) => {
   const [progress, setProgress] = useState(0);
-  const validAxes = axes.filter((a) => a.value != null) as { label: string; value: number }[];
+  const normalizedAxes = axes ?? (data ? Object.entries(data).map(([key, value]) => ({ label: key, value })) : []);
+  const validAxes = normalizedAxes.filter((a) => a.value != null) as { label: string; value: number }[];
 
   useEffect(() => {
     const delay = window.setTimeout(() => {
@@ -29,7 +31,7 @@ const ScoreRadarChart = ({ axes, className, size = 280 }: ScoreRadarChartProps) 
       requestAnimationFrame(step);
     }, 500);
     return () => clearTimeout(delay);
-  }, [axes]);
+  }, [normalizedAxes]);
 
   if (validAxes.length < 3) return null;
 

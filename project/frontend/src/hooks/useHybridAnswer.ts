@@ -14,6 +14,8 @@ export interface UseHybridAnswerOptions {
   onRecordingStart?: () => void;
   /** Fired when MediaRecorder stops, before transcription (e.g. stop gesture tracking). */
   onRecordingStop?: () => void;
+  /** Language code for speech recognition (e.g. 'en-US', 'es-ES') */
+  language?: string;
 }
 
 export function useHybridAnswer(options: UseHybridAnswerOptions = {}) {
@@ -22,6 +24,7 @@ export function useHybridAnswer(options: UseHybridAnswerOptions = {}) {
     releaseStreamOnStop = true,
     onRecordingStart,
     onRecordingStop,
+    language = 'en-US',
   } = options;
 
   const [typedText, setTypedText] = useState('');
@@ -155,6 +158,7 @@ export function useHybridAnswer(options: UseHybridAnswerOptions = {}) {
       try {
         const formData = new FormData();
         formData.append('audio_file', audioBlob, filename);
+        formData.append('language', language);
 
         const res = await fetch(API_ENDPOINTS.speechToText, { method: 'POST', body: formData });
         const raw = await res.text();
@@ -182,7 +186,7 @@ export function useHybridAnswer(options: UseHybridAnswerOptions = {}) {
         if (releaseStreamOnStop) releaseStream();
       }
     },
-    [applyTranscriptChunk, releaseStream, releaseStreamOnStop]
+    [applyTranscriptChunk, releaseStream, releaseStreamOnStop, language]
   );
 
   const startRecording = useCallback(async () => {

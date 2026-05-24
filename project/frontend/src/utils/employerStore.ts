@@ -74,7 +74,16 @@ const getEmployerAuth = () => {
 const normalizeString = (value: string) => value.trim();
 
 const toNumber = (value: unknown): number => {
-  if (typeof value === 'number') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  // Firestore Timestamp objects expose a `toMillis()` method
+  if (value && typeof (value as any).toMillis === 'function') {
+    try {
+      const ms = (value as any).toMillis();
+      if (typeof ms === 'number' && Number.isFinite(ms)) return ms;
+    } catch {
+      // fallthrough to return 0
+    }
+  }
   return 0;
 };
 
@@ -163,6 +172,8 @@ export const saveEmployerProfile = async (
   const profileRef = doc(db, 'employerProfiles', userId);
   const existing = await getDoc(profileRef);
   const now = Date.now();
+  const existingData = existing.exists() ? (existing.data() as Record<string, unknown>) : null;
+  const existingCreatedAt = existingData ? toNumber(existingData.createdAt) : 0;
 
   await setDoc(
     profileRef,
@@ -174,7 +185,7 @@ export const saveEmployerProfile = async (
       phoneNumber: normalizeString(profile.phoneNumber),
       website: normalizeString(profile.website ?? ''),
       companyDescription: normalizeString(profile.companyDescription ?? ''),
-      createdAt: existing.exists() ? Number(existing.data().createdAt ?? now) : now,
+      createdAt: existing.exists() ? (existingCreatedAt || now) : now,
       updatedAt: now,
       serverUpdatedAt: serverTimestamp(),
     },

@@ -29,6 +29,7 @@ const CandidateSignupPage = () => {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(candidateAuth, provider);
       setSuccess('Candidate account created successfully with Google.');
+      navigate('/student-dashboard');
     } catch (signupError) {
       setError(formatFirebaseError(signupError));
     } finally {
@@ -52,6 +53,7 @@ const CandidateSignupPage = () => {
       await createUserWithEmailAndPassword(candidateAuth, email.trim(), password);
       setSuccess('Candidate account created successfully.');
       setPassword('');
+      navigate('/student-dashboard');
     } catch (signupError) {
       setError(formatFirebaseError(signupError));
     } finally {

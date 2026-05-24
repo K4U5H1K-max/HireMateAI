@@ -18,6 +18,8 @@ interface LocationState {
   role: string;
   resumeSummary: string;
   isVideoInterview?: boolean;
+  jobId?: string;
+  isEmployerJob?: boolean;
 }
 
 const ResultsPage = () => {
@@ -47,13 +49,25 @@ const ResultsPage = () => {
 
     const persistMemory = async () => {
       try {
-        await saveCandidateInterviewMemory({
-          role: state.role,
-          resumeSummary: state.resumeSummary,
-          qaList: state.qaList,
-          evaluation,
-          isVideoInterview: Boolean(state.isVideoInterview),
-        });
+        // For mock interviews, save to candidate memory
+        if (!state.isEmployerJob) {
+          await saveCandidateInterviewMemory({
+            role: state.role,
+            resumeSummary: state.resumeSummary,
+            qaList: state.qaList,
+            evaluation,
+            isVideoInterview: Boolean(state.isVideoInterview),
+          });
+        } else if (state.jobId) {
+          // For employer job interviews, automatically submit the application
+          await applyToJob({
+            jobId: state.jobId,
+            role: state.role,
+            resumeSummary: state.resumeSummary,
+            qaList: state.qaList,
+            evaluation: evaluation,
+          });
+        }
       } catch {
         // No-op: results UI should stay available even if persistence fails.
       } finally {
@@ -158,6 +172,14 @@ const ResultsPage = () => {
 
   return (
     <PageContainer className="max-w-5xl">
+      {state.isEmployerJob && memorySaved && (
+        <Card variant="elevated" padding="md" className="mb-6 border-green-500/30 bg-green-500/5">
+          <p className="text-green-400 font-medium">
+            ✓ Application submitted successfully! You can check your application status in your dashboard.
+          </p>
+        </Card>
+      )}
+
       <div className="text-center mb-2">
         <Badge className="mb-4">Step 4 — Results</Badge>
         <h1 className="text-3xl sm:text-4xl font-bold text-white mb-2">Interview Results</h1>
@@ -234,41 +256,48 @@ const ResultsPage = () => {
       </Card>
 
       <div className="flex flex-col sm:flex-row gap-4">
-        <Button variant="ghost" fullWidth size="lg" onClick={() => navigate('/')}>
+        <Button 
+          variant="ghost" 
+          fullWidth 
+          size="lg" 
+          onClick={() => navigate(state.isEmployerJob ? '/candidate-jobs' : '/')}
+        >
           <Home className="w-5 h-5" />
-          Return to Home
+          {state.isEmployerJob ? 'Back to Jobs' : 'Return to Home'}
         </Button>
         <Button fullWidth size="lg" onClick={handleDownloadPDF}>
           <Download className="w-5 h-5" />
           Download Result (PDF)
         </Button>
-        <Button
-          fullWidth
-          size="lg"
-          disabled={applying}
-          onClick={async () => {
-            const jobId = window.prompt('Enter the Job ID you want to apply to');
-            if (!jobId) return;
-            setApplying(true);
-            try {
-              await applyToJob({
-                jobId,
-                role: state.role,
-                resumeSummary: state.resumeSummary,
-                qaList: state.qaList,
-                evaluation: evaluation,
-              });
-              window.alert('Application submitted');
-            } catch (err) {
-              window.alert(err instanceof Error ? err.message : 'Failed to submit application');
-            } finally {
-              setApplying(false);
-            }
-          }}
-        >
-          <TrendingUp className="w-5 h-5" />
-          Apply to Job
-        </Button>
+        {!state.isEmployerJob && (
+          <Button
+            fullWidth
+            size="lg"
+            disabled={applying}
+            onClick={async () => {
+              const jobId = window.prompt('Enter the Job ID you want to apply to');
+              if (!jobId) return;
+              setApplying(true);
+              try {
+                await applyToJob({
+                  jobId,
+                  role: state.role,
+                  resumeSummary: state.resumeSummary,
+                  qaList: state.qaList,
+                  evaluation: evaluation,
+                });
+                window.alert('Application submitted');
+              } catch (err) {
+                window.alert(err instanceof Error ? err.message : 'Failed to submit application');
+              } finally {
+                setApplying(false);
+              }
+            }}
+          >
+            <TrendingUp className="w-5 h-5" />
+            Apply to Job
+          </Button>
+        )}
       </div>
     </PageContainer>
   );

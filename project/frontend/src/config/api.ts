@@ -7,6 +7,8 @@ export const API_ENDPOINTS = {
   tts: `${API_BASE_URL}/tts`,
   speechToText: `${API_BASE_URL}/speech_to_text`,
   evaluateInterview: `${API_BASE_URL}/evaluate_interview`,
+  translate: `${API_BASE_URL}/translate`,
+  translateToEnglish: `${API_BASE_URL}/translate-to-english`,
 };
 
 export default API_BASE_URL;

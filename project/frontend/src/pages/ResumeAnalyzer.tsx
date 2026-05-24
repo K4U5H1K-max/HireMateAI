@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, FileText, Video } from 'lucide-react';
 import { API_ENDPOINTS } from '../config/api';
+import { useLanguage } from '../contexts/LanguageContext';
+import LanguageSelector from '../components/LanguageSelector';
 import type { ResumeEvaluationResponse } from '../types';
 import ElectricBackground from '../components/ElectricBackground';
 import PageContainer from '../components/layout/PageContainer';
@@ -10,6 +12,7 @@ import { cn } from '../lib/cn';
 
 const ResumeAnalyzer = () => {
   const navigate = useNavigate();
+  const { selectedLanguage } = useLanguage();
 
   const [formData, setFormData] = useState({
     company: '',
@@ -85,6 +88,7 @@ const ResumeAnalyzer = () => {
         role: formData.role,
         numQuestions: formData.numQuestions,
         resumeSummary: resumeResults?.resume_summary,
+        language: selectedLanguage,
       },
     });
   };
@@ -141,6 +145,10 @@ const ResumeAnalyzer = () => {
             className="w-full mt-2 accent-brand"
           />
 
+          <div className="mt-8">
+            <LanguageSelector label="Interview Language" showLabel={true} />
+          </div>
+
           <label className="text-white font-medium text-sm mt-8 block">Resume Upload</label>
           <div className="mt-3">
             <input type="file" id="upload" className="hidden" accept=".pdf,.txt" onChange={handleFileChange} />
@@ -185,8 +193,45 @@ const ResumeAnalyzer = () => {
                 <p className="text-gray-200 mt-2 text-sm leading-relaxed">{resumeResults.resume_summary}</p>
               </Card>
 
+              {/* Structured Scores Card */}
+              {(resumeResults.technical_score || resumeResults.communication_score || resumeResults.experience_score) && (
+                <Card variant="ghost" padding="md">
+                  <h3 className="text-brand text-lg font-semibold mb-4">Evaluation Scores</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                    {resumeResults.technical_score !== undefined && (
+                      <div className="text-center p-3 bg-brand-muted/30 rounded-lg">
+                        <p className="text-gray-400 text-xs uppercase tracking-wider">Technical</p>
+                        <p className="text-2xl font-bold text-brand mt-1">{resumeResults.technical_score.toFixed(1)}</p>
+                        <p className="text-gray-500 text-xs">/10</p>
+                      </div>
+                    )}
+                    {resumeResults.communication_score !== undefined && (
+                      <div className="text-center p-3 bg-brand-muted/30 rounded-lg">
+                        <p className="text-gray-400 text-xs uppercase tracking-wider">Communication</p>
+                        <p className="text-2xl font-bold text-brand mt-1">{resumeResults.communication_score.toFixed(1)}</p>
+                        <p className="text-gray-500 text-xs">/10</p>
+                      </div>
+                    )}
+                    {resumeResults.experience_score !== undefined && (
+                      <div className="text-center p-3 bg-brand-muted/30 rounded-lg">
+                        <p className="text-gray-400 text-xs uppercase tracking-wider">Experience</p>
+                        <p className="text-2xl font-bold text-brand mt-1">{resumeResults.experience_score.toFixed(1)}</p>
+                        <p className="text-gray-500 text-xs">/10</p>
+                      </div>
+                    )}
+                    {resumeResults.overall_score !== undefined && (
+                      <div className="text-center p-3 bg-brand-muted/30 rounded-lg col-span-2 sm:col-span-1">
+                        <p className="text-gray-400 text-xs uppercase tracking-wider">Overall</p>
+                        <p className="text-2xl font-bold text-brand mt-1">{resumeResults.overall_score.toFixed(1)}</p>
+                        <p className="text-gray-500 text-xs">/10</p>
+                      </div>
+                    )}
+                  </div>
+                </Card>
+              )}
+
               <Card variant="ghost" padding="md">
-                <h3 className="text-brand text-lg font-semibold">Evaluation</h3>
+                <h3 className="text-brand text-lg font-semibold">Detailed Evaluation</h3>
                 <p className="text-gray-200 mt-2 text-sm leading-relaxed whitespace-pre-line">
                   {resumeResults.evaluation}
                 </p>
