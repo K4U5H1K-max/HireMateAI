@@ -1,0 +1,53 @@
+# Repo-wide build outputs and local clutter
+node_modules/
+dist/
+dist-ssr/
+build/
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+*.local
+secrets.json
+secrets/
+.secrets/
+*credentials*.json
+credentials.json
+service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+htmlcov/
+pip-wheel-metadata/
+.ipynb_checkpoints/
+
+# OS junk
+.DS_Store
+Thumbs.db
+Desktop.ini
