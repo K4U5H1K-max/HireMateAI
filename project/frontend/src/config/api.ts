@@ -9,6 +9,7 @@ export const API_ENDPOINTS = {
   evaluateInterview: `${API_BASE_URL}/evaluate_interview`,
   translate: `${API_BASE_URL}/translate`,
   translateToEnglish: `${API_BASE_URL}/translate-to-english`,
+  candidateApplications: `${API_BASE_URL}/candidate-applications`,
 };
 
 export default API_BASE_URL;

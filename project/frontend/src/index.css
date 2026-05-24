@@ -26,6 +26,31 @@
   .animation-delay-4000 {
     animation-delay: 4s;
   }
+
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(5, 252, 211, 0.9) #050505;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: #050505;
+    border-radius: 9999px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(5, 252, 211, 0.92), rgba(0, 199, 255, 0.72));
+    border-radius: 9999px;
+    border: 2px solid #050505;
+    box-shadow: 0 0 6px rgba(5, 252, 211, 0.18);
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgba(5, 252, 211, 1), rgba(0, 199, 255, 0.9));
+  }
 }
 
 @keyframes blob {
@@ -54,12 +79,28 @@
   }
 }
 
+@keyframes neonPulse {
+  0%,
+  100% {
+    opacity: 0.78;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.015);
+  }
+}
+
 .animate-blob {
   animation: blob 7s infinite;
 }
 
 .animate-fadeIn {
   animation: fadeIn 0.5s ease-out;
+}
+
+.animate-neonPulse {
+  animation: neonPulse 5.5s ease-in-out infinite;
 }
 
 input[type="range"]::-webkit-slider-thumb {

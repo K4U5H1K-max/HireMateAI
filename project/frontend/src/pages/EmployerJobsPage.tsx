@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Briefcase, Clock3, Plus, Sparkles } from 'lucide-react';
 import PageContainer from '../components/layout/PageContainer';
 import ElectricBackground from '../components/ElectricBackground';
-import { Badge, Button, Card } from '../components/ui';
+import { Badge, Button, Card, NeonDropdown } from '../components/ui';
 import type { EmployerProfile, JobPostingWithStats, WorkMode } from '../types/employer';
 import {
   createEmployerJob,
@@ -267,20 +267,18 @@ const EmployerJobsPage = () => {
               </label>
 
               <div className="grid sm:grid-cols-2 gap-4">
-                <label className="text-sm text-gray-300">
-                  Work location type *
-                  <select
-                    className="mt-2 w-full bg-surface-overlay border border-brand-border text-white px-4 py-3 rounded-xl"
-                    value={jobForm.workMode}
-                    onChange={(event) => setField('workMode', event.target.value as WorkMode)}
-                  >
-                    {workModeOptions.map((mode) => (
-                      <option key={mode.value} value={mode.value}>
-                        {mode.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <div className="text-sm text-gray-300">
+                  <p>Work location type *</p>
+                  <div className="mt-2">
+                    <NeonDropdown
+                      value={jobForm.workMode}
+                      onChange={(nextValue) => setField('workMode', nextValue)}
+                      options={workModeOptions}
+                      ariaLabel="Work location type"
+                      showLabel={false}
+                    />
+                  </div>
+                </div>
 
                 <label className="text-sm text-gray-300">
                   Work location *

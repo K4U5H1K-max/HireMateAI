@@ -14,6 +14,15 @@ service cloud.firestore {
         get(/databases/$(database)/documents/jobs/$(jobId)).data.employerId == request.auth.uid;
     }
 
+    function canAccessApplication(data) {
+      return signedIn() && (
+        data.candidateId == request.auth.uid ||
+        data.userId == request.auth.uid ||
+        data.employerId == request.auth.uid ||
+        (data.jobId is string && ownsJob(data.jobId))
+      );
+    }
+
     match /employerProfiles/{userId} {
       allow read, write: if isOwner(userId);
     }
@@ -25,14 +34,41 @@ service cloud.firestore {
         && resource.data.employerId == request.auth.uid
         && request.resource.data.employerId == resource.data.employerId;
       allow delete: if signedIn() && resource.data.employerId == request.auth.uid;
+
+      match /applications/{applicationId} {
+        allow get, list: if canAccessApplication(resource.data) || ownsJob(jobId);
+        allow create: if signedIn() && (
+          request.resource.data.candidateId == request.auth.uid ||
+          request.resource.data.userId == request.auth.uid ||
+          ownsJob(jobId)
+        );
+        allow update, delete: if canAccessApplication(resource.data) || ownsJob(jobId);
+      }
+
+      match /interviewResults/{resultId} {
+        allow get, list: if signedIn() && (
+          resource.data.candidateId == request.auth.uid ||
+          resource.data.userId == request.auth.uid ||
+          ownsJob(jobId)
+        );
+      }
     }
 
     match /applications/{applicationId} {
-      allow create: if signedIn() && request.resource.data.candidateId == request.auth.uid;
-      allow read, update, delete: if signedIn() && (
-        resource.data.candidateId == request.auth.uid ||
-        ownsJob(resource.data.jobId)
+      allow create: if signedIn() && (
+        request.resource.data.candidateId == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
       );
+      allow get, list: if canAccessApplication(resource.data);
+      allow update, delete: if canAccessApplication(resource.data);
+    }
+
+    match /candidateUsers/{userId} {
+      allow read, write: if isOwner(userId);
+
+      match /interviews/{interviewId} {
+        allow read, create, update, delete: if isOwner(userId);
+      }
     }
   }
 }

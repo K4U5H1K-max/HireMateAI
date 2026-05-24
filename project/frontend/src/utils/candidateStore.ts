@@ -9,6 +9,7 @@ import {
   orderBy,
 } from 'firebase/firestore/lite';
 import { candidateAuth, getCandidateDb } from '../config/candidateFirebase';
+import { API_ENDPOINTS } from '../config/api';
 import { getEmployerDb } from '../config/employerFirebase';
 import type { JobPosting } from '../types/employer';
 
@@ -28,6 +29,10 @@ export interface CandidateApplication {
 export interface CandidateInterview {
   id: string;
   userId: string;
+  jobId?: string | null;
+  applicationId?: string | null;
+  employerId?: string | null;
+  companyName?: string | null;
   role: string;
   resumeSummary: string;
   interviewType: 'video' | 'text';
@@ -84,6 +89,10 @@ export const getCandidateInterviewHistory = async (userId: string): Promise<Cand
     return {
       id: doc.id,
       userId: data.userId ?? userId,
+      jobId: data.jobId ?? null,
+      applicationId: data.applicationId ?? null,
+      employerId: data.employerId ?? null,
+      companyName: data.companyName ?? null,
       role: String(data.role ?? ''),
       resumeSummary: String(data.resumeSummary ?? ''),
       interviewType: (data.interviewType ?? 'text') as 'video' | 'text',
@@ -194,42 +203,19 @@ export const getCandidateApplications = async (): Promise<CandidateApplication[]
     const user = candidateAuth.currentUser;
     if (!user) return [];
 
-    const db = getEmployerDb();
-    const appRef = collection(db, 'applications');
-    const q = query(appRef, where('candidateId', '==', user.uid));
-    const snapshot = await getDocs(q);
-
-    const apps = snapshot.docs.map((doc) => {
-      const data = doc.data() as Record<string, unknown>;
-      const toNumber = (value: unknown): number | undefined => {
-        if (typeof value === 'number') return value;
-        if (value && typeof (value as any).toMillis === 'function') {
-          try {
-            const ms = (value as any).toMillis();
-            if (typeof ms === 'number') return ms;
-          } catch {
-            // fallthrough
-          }
-        }
-        return undefined;
-      };
-
-      return {
-        id: doc.id,
-        candidateId: String(data.candidateId ?? ''),
-        jobId: String(data.jobId ?? ''),
-        positionTitle: String(data.positionTitle ?? ''),
-        companyName: String(data.companyName ?? ''),
-        status: (String(data.status ?? 'pending') as any),
-        interviewScore: toNumber(data.interviewScore),
-        feedback: data.feedback ? String(data.feedback) : undefined,
-        submittedAt: toNumber(data.submittedAt) || 0,
-        interviewDate: toNumber(data.interviewDate),
-      };
+    const idToken = await user.getIdToken();
+    const response = await fetch(`${API_ENDPOINTS.candidateApplications}?candidateId=${encodeURIComponent(user.uid)}`, {
+      headers: {
+        ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+      },
     });
 
-    // Sort by submittedAt descending client-side
-    return apps.sort((a, b) => b.submittedAt - a.submittedAt);
+    if (!response.ok) {
+      throw new Error(await response.text());
+    }
+
+    const data = (await response.json()) as { applications?: CandidateApplication[] };
+    return (data.applications ?? []).sort((a, b) => b.submittedAt - a.submittedAt);
   } catch (err) {
     console.error('Error fetching applications:', err);
     return [];

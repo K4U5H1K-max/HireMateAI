@@ -15,13 +15,24 @@ import glob
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 import pyttsx3
 import speech_recognition as sr
+
+try:
+    import firebase_admin
+    from firebase_admin import auth as firebase_auth
+    from firebase_admin import credentials as firebase_credentials
+    from firebase_admin import firestore as firebase_firestore
+except Exception:
+    firebase_admin = None
+    firebase_auth = None
+    firebase_credentials = None
+    firebase_firestore = None
 
 # ----------------------------------------------------------
 # GEMINI IMPORT
@@ -252,6 +263,91 @@ app = FastAPI(
     title="HireMate AI API",
     version="1.0.0"
 )
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _initialize_firebase_admin() -> bool:
+    if firebase_admin is None or firebase_credentials is None:
+        return False
+
+    try:
+        firebase_admin.get_app()
+        return True
+    except Exception:
+        pass
+
+    candidate_paths = []
+    env_credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if env_credentials:
+        candidate_paths.append(Path(env_credentials))
+    candidate_paths.append(_project_root() / "hiremate-key.json")
+
+    for credentials_path in candidate_paths:
+        if credentials_path.exists():
+            firebase_admin.initialize_app(firebase_credentials.Certificate(str(credentials_path)))
+            return True
+
+    try:
+        firebase_admin.initialize_app()
+        return True
+    except Exception:
+        return False
+
+
+def _get_firestore_db():
+    if not _initialize_firebase_admin() or firebase_firestore is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Firestore is not configured on this backend"
+        )
+
+    return firebase_firestore.client()
+
+
+def _get_request_bearer_token(authorization: Optional[str]) -> Optional[str]:
+    if not authorization:
+        return None
+    if not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    return token or None
+
+
+def _resolve_candidate_identity(authorization: Optional[str], candidate_id: Optional[str]) -> Optional[str]:
+    if not candidate_id:
+        return None
+
+    token = _get_request_bearer_token(authorization)
+    if not token or firebase_auth is None:
+        return candidate_id
+
+    try:
+        decoded = firebase_auth.verify_id_token(token)
+    except Exception as exc:
+        print(f"Warning: candidate token could not be verified, continuing with request payload: {exc}")
+        return candidate_id
+
+    uid = str(decoded.get("uid") or "")
+    if uid and uid != candidate_id:
+        print(f"Warning: candidate id mismatch. payload={candidate_id} verified={uid}")
+
+    return uid or candidate_id
+
+
+class InterviewScorePayload(BaseModel):
+    technical_score: Optional[float] = None
+    communication_score: Optional[float] = None
+    role_fit_score: Optional[float] = None
+    presence_score: Optional[float] = None
+    final_score: Optional[float] = None
+    feedback: Optional[str] = None
+    nonverbal_feedback: Optional[str] = None
+    raw_evaluation: Optional[str] = None
+
+
 class TranslationRequest(BaseModel):
     text: str
     target_language: str
@@ -852,6 +948,47 @@ class QAPair(BaseModel):
     nonverbal: Optional[NonverbalMetrics] = None
 
 
+class ApplyRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    job_id: str = Field(alias="jobId")
+    candidate_id: str = Field(alias="candidateId")
+    candidate_email: Optional[str] = Field(default=None, alias="candidateEmail")
+    candidate_name: Optional[str] = Field(default=None, alias="candidateName")
+    role: str
+    resume_summary: str = Field(alias="resumeSummary")
+    qa_list: List[QAPair] = Field(alias="qaList")
+    evaluation: InterviewScorePayload
+    is_video_interview: bool = Field(default=False, alias="isVideoInterview")
+
+
+class ApplyResponse(BaseModel):
+    success: bool
+    application_id: str
+    interview_id: str
+    job_id: str
+    message: str
+
+
+class CandidateApplicationResponse(BaseModel):
+    id: str
+    candidateId: str
+    jobId: str
+    positionTitle: str
+    companyName: str
+    status: str
+    interviewScore: Optional[float] = None
+    feedback: Optional[str] = None
+    submittedAt: int
+    interviewDate: Optional[int] = None
+
+
+class CandidateApplicationsEnvelope(BaseModel):
+    success: bool
+    applications: List[CandidateApplicationResponse]
+    message: str
+
+
 class InterviewEvaluationRequest(BaseModel):
     qa_list: List[QAPair]
     role: str
@@ -1424,6 +1561,174 @@ def _port_in_use(port: int) -> bool:
     import socket
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+@app.post("/apply", response_model=ApplyResponse)
+async def apply_for_job(request: ApplyRequest, authorization: Optional[str] = Header(default=None)):
+    candidate_id = _resolve_candidate_identity(authorization, request.candidate_id)
+    if not candidate_id:
+        raise HTTPException(status_code=401, detail="Unable to identify candidate")
+
+    db = _get_firestore_db()
+    job_ref = db.collection("jobs").document(request.job_id)
+    job_snapshot = job_ref.get()
+
+    if not job_snapshot.exists:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job_data = job_snapshot.to_dict() or {}
+    employer_id = str(job_data.get("employerId") or "")
+    company_name = str(job_data.get("companyName") or "")
+    position_title = str(job_data.get("positionTitle") or request.role)
+    min_score = float(job_data.get("minScoreForHumanInterview") or 0)
+
+    technical_score = request.evaluation.technical_score
+    communication_score = request.evaluation.communication_score
+    role_fit_score = request.evaluation.role_fit_score
+    presence_score = request.evaluation.presence_score
+    final_score = request.evaluation.final_score
+
+    score_values = [value for value in [technical_score, communication_score, role_fit_score, presence_score] if isinstance(value, (int, float))]
+    if final_score is None:
+        final_score = round(sum(score_values) / len(score_values), 2) if score_values else 0.0
+
+    qualified_for_human_interview = final_score >= min_score
+    now = int(time.time() * 1000)
+
+    application_ref = db.collection("applications").document()
+    application_payload = {
+        "candidateId": candidate_id,
+        "userId": candidate_id,
+        "candidateEmail": request.candidate_email or None,
+        "candidateName": request.candidate_name or "Unknown Candidate",
+        "employerId": employer_id,
+        "companyName": company_name,
+        "jobId": request.job_id,
+        "positionTitle": position_title,
+        "role": request.role,
+        "resumeSummary": request.resume_summary,
+        "qaList": [qa.model_dump() for qa in request.qa_list],
+        "status": "pending",
+        "interviewStatus": "completed",
+        "interviewScore": final_score,
+        "interviewDate": now,
+        "submittedAt": now,
+        "resumeScore": None,
+        "technicalScore": technical_score,
+        "communicationScore": communication_score,
+        "roleFitScore": role_fit_score,
+        "nonverbalScore": presence_score,
+        "finalScore": final_score,
+        "qualifiedForHumanInterview": qualified_for_human_interview,
+        "feedback": request.evaluation.feedback,
+        "nonverbalFeedback": request.evaluation.nonverbal_feedback,
+        "rawEvaluation": request.evaluation.raw_evaluation,
+        "createdAt": now,
+        "updatedAt": now,
+        "serverCreatedAt": firebase_firestore.SERVER_TIMESTAMP,
+        "serverUpdatedAt": firebase_firestore.SERVER_TIMESTAMP,
+    }
+    application_ref.set(application_payload)
+
+    job_application_ref = db.collection("jobs").document(request.job_id).collection("applications").document(application_ref.id)
+    job_application_ref.set(application_payload)
+
+    job_interview_ref = db.collection("jobs").document(request.job_id).collection("interviewResults").document(application_ref.id)
+    job_interview_ref.set(
+        {
+            "applicationId": application_ref.id,
+            "jobId": request.job_id,
+            "candidateId": candidate_id,
+            "userId": candidate_id,
+            "companyName": company_name,
+            "positionTitle": position_title,
+            "interviewStatus": "completed",
+            "technicalScore": technical_score,
+            "communicationScore": communication_score,
+            "roleFitScore": role_fit_score,
+            "presenceScore": presence_score,
+            "finalScore": final_score,
+            "qualifiedForHumanInterview": qualified_for_human_interview,
+            "createdAt": now,
+            "serverCreatedAt": firebase_firestore.SERVER_TIMESTAMP,
+        }
+    )
+
+    interview_ref = db.collection("candidateUsers").document(candidate_id).collection("interviews").document(application_ref.id)
+    interview_ref.set(
+        {
+            "applicationId": application_ref.id,
+            "candidateId": candidate_id,
+            "userId": candidate_id,
+            "employerId": employer_id,
+            "companyName": company_name,
+            "jobId": request.job_id,
+            "positionTitle": position_title,
+            "role": request.role,
+            "resumeSummary": request.resume_summary,
+            "interviewType": "video" if request.is_video_interview or presence_score is not None else "text",
+            "interviewStatus": "completed",
+            "scores": {
+                "technical": technical_score,
+                "communication": communication_score,
+                "roleFit": role_fit_score,
+                "presence": presence_score,
+                "final": final_score,
+            },
+            "feedback": request.evaluation.feedback,
+            "nonverbalFeedback": request.evaluation.nonverbal_feedback,
+            "status": "submitted",
+            "createdAt": now,
+            "serverCreatedAt": firebase_firestore.SERVER_TIMESTAMP,
+        }
+    )
+
+    return ApplyResponse(
+        success=True,
+        application_id=application_ref.id,
+        interview_id=application_ref.id,
+        job_id=request.job_id,
+        message="Application submitted successfully",
+    )
+
+
+@app.get("/candidate-applications", response_model=CandidateApplicationsEnvelope)
+async def get_candidate_applications(candidateId: str, authorization: Optional[str] = Header(default=None)):
+    candidate_id = _resolve_candidate_identity(authorization, candidateId)
+    if not candidate_id:
+        raise HTTPException(status_code=401, detail="Unable to identify candidate")
+
+    db = _get_firestore_db()
+    snapshot = db.collection("applications").where("candidateId", "==", candidate_id).stream()
+
+    applications: List[CandidateApplicationResponse] = []
+    for doc in snapshot:
+        data = doc.to_dict() or {}
+        interview_score_value = data.get("interviewScore")
+        submitted_at_value = data.get("submittedAt") or data.get("createdAt") or 0
+        interview_date_value = data.get("interviewDate")
+
+        applications.append(
+            CandidateApplicationResponse(
+                id=doc.id,
+                candidateId=str(data.get("candidateId") or candidate_id),
+                jobId=str(data.get("jobId") or ""),
+                positionTitle=str(data.get("positionTitle") or ""),
+                companyName=str(data.get("companyName") or ""),
+                status=str(data.get("status") or data.get("interviewStatus") or "pending"),
+                interviewScore=(float(interview_score_value) if isinstance(interview_score_value, (int, float)) else None),
+                feedback=str(data.get("feedback")) if data.get("feedback") is not None else None,
+                submittedAt=int(submitted_at_value),
+                interviewDate=(int(interview_date_value) if isinstance(interview_date_value, (int, float)) else None),
+            )
+        )
+
+    applications.sort(key=lambda item: item.submittedAt, reverse=True)
+    return CandidateApplicationsEnvelope(
+        success=True,
+        applications=applications,
+        message="Candidate applications loaded successfully",
+    )
 
 
 if __name__ == "__main__":

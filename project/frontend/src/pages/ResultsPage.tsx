@@ -8,7 +8,7 @@ import { buildEvaluationPayload } from '../utils/evaluationPayload';
 import PageContainer from '../components/layout/PageContainer';
 import { Button, Card, Badge } from '../components/ui';
 import ResultsHeroReveal from '../components/results/ResultsHeroReveal';
-import ScoreRadarChart from '../components/results/ScoreRadarChart';
+import PerformanceEqualizer from '../components/results/PerformanceEqualizer';
 import AnimatedScoreCard from '../components/results/AnimatedScoreCard';
 import FeedbackReveal from '../components/results/FeedbackReveal';
 import { saveCandidateInterviewMemory, applyToJob } from '../utils/candidateMemory';
@@ -30,6 +30,7 @@ const ResultsPage = () => {
   const [evaluation, setEvaluation] = useState<InterviewEvaluationResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [submissionError, setSubmissionError] = useState('');
   const [memorySaved, setMemorySaved] = useState(false);
   const [applying, setApplying] = useState(false);
 
@@ -49,30 +50,36 @@ const ResultsPage = () => {
 
     const persistMemory = async () => {
       try {
-        // For mock interviews, save to candidate memory
-        if (!state.isEmployerJob) {
-          await saveCandidateInterviewMemory({
-            role: state.role,
-            resumeSummary: state.resumeSummary,
-            qaList: state.qaList,
-            evaluation,
-            isVideoInterview: Boolean(state.isVideoInterview),
-          });
-        } else if (state.jobId) {
-          // For employer job interviews, automatically submit the application
+        await saveCandidateInterviewMemory({
+          role: state.role,
+          resumeSummary: state.resumeSummary,
+          qaList: state.qaList,
+          evaluation,
+          isVideoInterview: Boolean(state.isVideoInterview),
+          jobId: state.jobId,
+        });
+      } catch (persistError) {
+        console.error('Failed to save candidate interview memory:', persistError);
+      }
+
+      if (state.jobId) {
+        try {
           await applyToJob({
             jobId: state.jobId,
             role: state.role,
             resumeSummary: state.resumeSummary,
             qaList: state.qaList,
-            evaluation: evaluation,
+            evaluation,
           });
+          setSubmissionError('');
+        } catch (submitError) {
+          const message = submitError instanceof Error ? submitError.message : 'Failed to submit application';
+          console.error('Failed to submit job application:', submitError);
+          setSubmissionError(message);
         }
-      } catch {
-        // No-op: results UI should stay available even if persistence fails.
-      } finally {
-        setMemorySaved(true);
       }
+
+      setMemorySaved(true);
     };
 
     void persistMemory();
@@ -163,16 +170,22 @@ const ResultsPage = () => {
     { label: 'Technical', value: evaluation.technical_score },
     { label: 'Communication', value: evaluation.communication_score },
     { label: 'Role Fit', value: evaluation.role_fit_score },
-    ...(evaluation.presence_score != null
-      ? [{ label: 'Presence', value: evaluation.presence_score }]
-      : []),
+    { label: 'Presence', value: evaluation.presence_score },
   ];
 
   const cardBaseDelay = 900;
 
   return (
     <PageContainer className="max-w-5xl">
-      {state.isEmployerJob && memorySaved && (
+      {submissionError && (
+        <Card variant="elevated" padding="md" className="mb-6 border-amber-500/30 bg-amber-500/5">
+          <p className="text-amber-300 font-medium">
+            Application sync issue: {submissionError}
+          </p>
+        </Card>
+      )}
+
+      {state.jobId && memorySaved && !submissionError && (
         <Card variant="elevated" padding="md" className="mb-6 border-green-500/30 bg-green-500/5">
           <p className="text-green-400 font-medium">
             ✓ Application submitted successfully! You can check your application status in your dashboard.
@@ -189,12 +202,12 @@ const ResultsPage = () => {
       <Card variant="elevated" padding="lg" className="mb-6 overflow-hidden">
         <ResultsHeroReveal evaluation={evaluation} />
 
-        <div className="grid lg:grid-cols-2 gap-8 items-center border-t border-white/5 pt-8">
-          <div>
-            <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 text-center lg:text-left">
+        <div className="grid gap-8 border-t border-white/5 pt-8 lg:grid-cols-2 lg:items-center">
+          <div className="space-y-4">
+            <h3 className="text-sm font-semibold uppercase tracking-wider text-gray-400 text-center lg:text-left">
               Performance profile
             </h3>
-            <ScoreRadarChart axes={radarAxes} size={260} className="mx-auto lg:mx-0" />
+            <PerformanceEqualizer axes={radarAxes} className="mx-auto w-full max-w-[640px] lg:mx-0" />
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
@@ -260,16 +273,16 @@ const ResultsPage = () => {
           variant="ghost" 
           fullWidth 
           size="lg" 
-          onClick={() => navigate(state.isEmployerJob ? '/candidate-jobs' : '/')}
+          onClick={() => navigate(state.jobId ? '/candidate-jobs' : '/')}
         >
           <Home className="w-5 h-5" />
-          {state.isEmployerJob ? 'Back to Jobs' : 'Return to Home'}
+          {state.jobId ? 'Back to Jobs' : 'Return to Home'}
         </Button>
         <Button fullWidth size="lg" onClick={handleDownloadPDF}>
           <Download className="w-5 h-5" />
           Download Result (PDF)
         </Button>
-        {!state.isEmployerJob && (
+        {!state.jobId && (
           <Button
             fullWidth
             size="lg"

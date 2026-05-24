@@ -118,7 +118,11 @@ const mapJobPosting = (id: string, data: Record<string, unknown>): JobPosting =>
 
 const mapApplication = (id: string, data: Record<string, unknown>): JobApplication => ({
   id,
+  candidateId: String(data.candidateId ?? ''),
+  employerId: String(data.employerId ?? ''),
   jobId: String(data.jobId ?? ''),
+  positionTitle: data.positionTitle ? String(data.positionTitle) : undefined,
+  companyName: data.companyName ? String(data.companyName) : undefined,
   candidateName: String(data.candidateName ?? 'Unknown Candidate'),
   candidateEmail: String(data.candidateEmail ?? 'N/A'),
   resumeScore: getScoreValue(data.resumeScore ?? data.roleFitScore),
@@ -128,6 +132,11 @@ const mapApplication = (id: string, data: Record<string, unknown>): JobApplicati
   nonverbalScore: getScoreValue(data.nonverbalScore ?? data.presenceScore ?? data.presence_score),
   finalScore: Number(data.finalScore ?? 0),
   qualifiedForHumanInterview: Boolean(data.qualifiedForHumanInterview),
+  status: data.status ? String(data.status) : undefined,
+  interviewStatus: data.interviewStatus ? String(data.interviewStatus) : undefined,
+  interviewScore: getScoreValue(data.interviewScore),
+  submittedAt: getScoreValue(data.submittedAt),
+  interviewDate: getScoreValue(data.interviewDate),
   resumeSummary: data.resumeSummary ? String(data.resumeSummary) : undefined,
   qaList: Array.isArray(data.qaList)
     ? data.qaList
@@ -243,7 +252,7 @@ export const getEmployerJobsWithStats = async (
 
       // sort applications by createdAt desc, then by computed rank
       applicants.sort((a, b) => b.createdAt - a.createdAt);
-      applicants.sort((left, right) => getApplicationRankScore(left) - getApplicationRankScore(right));
+      applicants.sort((left, right) => getApplicationRankScore(right) - getApplicationRankScore(left));
 
       const applicantsCount = applicants.length;
       const qualifiedCount = applicants.filter((app) => app.qualifiedForHumanInterview).length;
@@ -303,7 +312,7 @@ export const getApplicationsForJob = async (
 
   // client-side sort: newest first, then by computed rank
   applications.sort((a, b) => b.createdAt - a.createdAt);
-  return applications.sort((left, right) => getApplicationRankScore(left) - getApplicationRankScore(right));
+  return applications.sort((left, right) => getApplicationRankScore(right) - getApplicationRankScore(left));
 };
 
 export const closeEmployerJob = async (employerId: string, jobId: string): Promise<void> => {

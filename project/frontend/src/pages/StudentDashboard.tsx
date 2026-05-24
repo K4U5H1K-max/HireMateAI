@@ -12,7 +12,7 @@ import {
 import ElectricBackground from '../components/ElectricBackground';
 import PageContainer from '../components/layout/PageContainer';
 import { Button, Card, Badge } from '../components/ui';
-import ScoreRadarChart from '../components/results/ScoreRadarChart';
+import HexagonalAnalytics from '../components/results/HexagonalAnalytics';
 import AnimatedScoreCard from '../components/results/AnimatedScoreCard';
 
 const StudentDashboard = () => {
@@ -79,13 +79,12 @@ const StudentDashboard = () => {
     });
   };
 
-  const radarData = {
-    technical: stats.avgTechnical ?? 0,
-    communication: stats.avgCommunication ?? 0,
-    roleFit: stats.avgRoleFit ?? 0,
-    presence: stats.avgPresence ?? 0,
-    final: stats.avgFinal ?? 0,
-  };
+  const performanceAxes = [
+    { label: 'Technical', value: stats.avgTechnical ?? 0 },
+    { label: 'Communication', value: stats.avgCommunication ?? 0 },
+    { label: 'Role Fit', value: stats.avgRoleFit ?? 0 },
+    { label: 'Presence', value: stats.avgPresence ?? 0 },
+  ];
 
   if (loading) {
     return (
@@ -188,12 +187,18 @@ const StudentDashboard = () => {
 
         {/* Score Chart */}
         {stats.totalInterviews > 0 && (
-          <Card variant="elevated" padding="lg" className="mb-10">
-            <h2 className="text-xl font-bold text-white mb-6">Performance Overview</h2>
+          <Card variant="elevated" padding="lg" className="mb-10 overflow-hidden">
+            <div className="mb-6 flex flex-col gap-2">
+              <h2 className="text-xl font-bold text-white">Performance Overview</h2>
+              <p className="text-sm text-gray-400">
+                Average interview performance across your completed sessions
+              </p>
+            </div>
             <div className="flex justify-center">
-              <div style={{ width: '100%', maxWidth: '500px', height: '400px' }}>
-                <ScoreRadarChart data={radarData} />
-              </div>
+              <HexagonalAnalytics
+                axes={performanceAxes}
+                className="w-full max-w-[980px]"
+              />
             </div>
           </Card>
         )}

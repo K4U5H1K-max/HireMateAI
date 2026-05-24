@@ -205,6 +205,11 @@ const EmployerJobDetailsPage = () => {
           <div className="grid gap-4">
             {applications.map((application, index) => {
               const rankScore = getApplicationRankScore(application);
+              const displayName =
+                application.candidateName && application.candidateName !== 'Unknown Candidate'
+                  ? application.candidateName
+                  : application.candidateEmail;
+              const showEmailSubtitle = displayName !== application.candidateEmail && application.candidateEmail !== 'N/A';
 
               return (
                 <details
@@ -214,8 +219,8 @@ const EmployerJobDetailsPage = () => {
                   <summary className="list-none cursor-pointer px-4 py-4 flex flex-wrap items-center justify-between gap-4">
                     <div className="min-w-0">
                       <p className="text-xs uppercase tracking-[0.2em] text-gray-400">Rank #{index + 1}</p>
-                      <h3 className="text-lg font-semibold text-white mt-1">{application.candidateName}</h3>
-                      <p className="text-sm text-gray-400">{application.candidateEmail}</p>
+                      <h3 className="text-lg font-semibold text-white mt-1">{displayName}</h3>
+                      {showEmailSubtitle ? <p className="text-sm text-gray-400">{application.candidateEmail}</p> : null}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -233,6 +238,9 @@ const EmployerJobDetailsPage = () => {
                         }
                       >
                         {application.qualifiedForHumanInterview ? 'Qualified' : 'Review'}
+                      </span>
+                      <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 text-cyan-300">
+                        {application.interviewStatus || 'submitted'}
                       </span>
                     </div>
                   </summary>

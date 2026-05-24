@@ -12,5 +12,21 @@ service cloud.firestore {
         allow read, create, update, delete: if isOwner(userId);
       }
     }
+
+    match /applications/{applicationId} {
+      allow create: if request.auth != null && (
+        request.resource.data.candidateId == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+      allow get, list: if request.auth != null && (
+        resource.data.candidateId == request.auth.uid ||
+        resource.data.userId == request.auth.uid ||
+        resource.data.employerId == request.auth.uid
+      );
+      allow update, delete: if request.auth != null && (
+        resource.data.candidateId == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      );
+    }
   }
 }

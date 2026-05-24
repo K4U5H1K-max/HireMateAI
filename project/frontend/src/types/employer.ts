@@ -31,7 +31,11 @@ export interface JobPosting {
 
 export interface JobApplication {
   id: string;
+  candidateId?: string;
+  employerId?: string;
   jobId: string;
+  positionTitle?: string;
+  companyName?: string;
   candidateName: string;
   candidateEmail: string;
   technicalScore?: number;
@@ -41,6 +45,11 @@ export interface JobApplication {
   nonverbalScore?: number;
   finalScore: number;
   qualifiedForHumanInterview: boolean;
+  status?: string;
+  interviewStatus?: string;
+  interviewScore?: number;
+  submittedAt?: number;
+  interviewDate?: number;
   resumeSummary?: string;
   qaList?: Array<{ question: string; answer: string }>;
   feedback?: string;
