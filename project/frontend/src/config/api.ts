@@ -1,4 +1,7 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  'https://hiremateai-ty49.onrender.com';
 
 export const API_ENDPOINTS = {
   uploadResume: `${API_BASE_URL}/upload_resume`,
