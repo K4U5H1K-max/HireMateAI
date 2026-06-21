@@ -105,7 +105,10 @@ export const applyToJob = async (input: ApplyToJobInput): Promise<void> => {
     evaluation: input.evaluation,
   };
 
-  const backend = (import.meta as any).env.VITE_API_URL || 'http://localhost:8000';
+  // const backend = (import.meta as any).env.VITE_API_URL || 'http://localhost:8000';
+  const backend =
+  (import.meta as any).env.VITE_API_URL ||
+  'https://hiremateai-ty49.onrender.com';
 
   const resp = await fetch(`${backend}/apply`, {
     method: 'POST',
